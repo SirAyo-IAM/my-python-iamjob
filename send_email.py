@@ -14,7 +14,7 @@ with open(CSV_FILE, "rb") as file:
 payload = {
     "sender": {
         "name": "UK IAM Hunter",
-        "email": send_email
+        "email": sender_email
     },
     "to": [
         {
