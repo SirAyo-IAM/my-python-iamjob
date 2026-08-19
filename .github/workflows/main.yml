@@ -36,3 +36,9 @@ jobs:
         with:
           name: uk-iam-results
           path: uk_iam_results.csv
+
+      - name: Send email
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
+        run: python send_email.py
