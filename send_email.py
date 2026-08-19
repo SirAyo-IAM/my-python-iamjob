@@ -6,6 +6,7 @@ CSV_FILE = "uk_iam_results.csv"
 
 brevo_api_key = os.environ["BREVO_API_KEY"]
 report_email = os.environ["REPORT_EMAIL"]
+sender_email = os.environ["BREVO_SENDER_EMAIL"]
 
 with open(CSV_FILE, "rb") as file:
     csv_content = base64.b64encode(file.read()).decode("utf-8")
@@ -13,7 +14,7 @@ with open(CSV_FILE, "rb") as file:
 payload = {
     "sender": {
         "name": "UK IAM Hunter",
-        "email": report_email
+        "email": send_email
     },
     "to": [
         {
