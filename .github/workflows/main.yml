@@ -22,68 +22,17 @@ jobs:
       - name: Run UK IAM Hunter
         run: python uk_iam_hunter.py
 
+      - name: Check CSV exists
+        run: |
+          if [ ! -f uk_iam_results.csv ]; then
+            echo "ERROR: uk_iam_results.csv was not created"
+            exit 1
+          fi
+          echo "CSV found successfully"
+          ls -lh uk_iam_results.csv
+
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: uk-iam-results
           path: uk_iam_results.csv
-
-      - name: Email results
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-        run: |
-          python - <<'PY'
-          import os
-          import base64
-          import requests
-
-          csv_file = "uk_iam_results.csv"
-
-          with open(csv_file, "rb") as f:
-              csv_content = base64.b64encode(f.read()).decode("utf-8")
-
-          payload = {
-              "sender": {
-                  "name": "UK IAM Hunter",
-                  "email": os.environ["REPORT_EMAIL"]
-              },
-              "to": [
-                  {
-                      "email": os.environ["REPORT_EMAIL"]
-                  }
-              ],
-              "subject": "UK IAM Hunter - Daily Results",
-              "textContent": """Your daily UK IAM/PAM job scan is complete.
-
-The CSV containing today's verified job openings is attached.
-
-Regards,
-UK IAM Hunter
-""",
-              "attachment": [
-                  {
-                      "content": csv_content,
-                      "name": "uk_iam_results.csv"
-                  }
-              ]
-          }
-
-          response = requests.post(
-              "https://api.brevo.com/v3/smtp/email",
-              headers={
-                  "accept": "application/json",
-                  "api-key": os.environ["BREVO_API_KEY"],
-                  "content-type": "application/json"
-              },
-              json=payload,
-              timeout=30
-          )
-
-          if response.status_code not in (200, 201):
-              print("Brevo response:", response.text)
-              raise SystemExit("Email sending failed")
-
-          print("Email sent successfully.")
-          print(response.text)
-          PY
