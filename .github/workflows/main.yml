@@ -3,6 +3,10 @@ name: Run UK IAM Hunter
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "0 12 * * *"
+      timezone: "Europe/London"
+
 jobs:
   run-python:
     runs-on: ubuntu-latest
