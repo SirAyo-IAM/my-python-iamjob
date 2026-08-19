@@ -16,5 +16,8 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install dependencies
+        run: pip install requests
+
       - name: Run UK IAM Hunter
         run: python uk_iam_hunter.py
