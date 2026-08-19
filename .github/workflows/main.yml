@@ -21,3 +21,9 @@ jobs:
 
       - name: Run UK IAM Hunter
         run: python uk_iam_hunter.py
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: uk-iam-results
+          path: uk_iam_results.csv
