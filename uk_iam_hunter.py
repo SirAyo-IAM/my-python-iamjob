@@ -51,6 +51,18 @@ DEDUPLICATE_RESULTS = True
 WRITE_CSV = True
 CSV_FILENAME = "uk_iam_results.csv"
 
+# ============================================================================
+# GOOGLE SHEETS JOB ARCHIVE
+# ============================================================================
+
+GOOGLE_SHEETS_WEBHOOK_URL = (
+    "https://script.google.com/macros/s/"
+    "AKfycbzAxS5Keh8vArI6xXwWc-SmU6DN-FkTcKDVONmEMCLdfxgrQR-vPoDfloxGK8Z0MVBssg"
+    "/exec"
+)
+
+SEND_RESULTS_TO_GOOGLE_SHEETS = True
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1910,6 +1922,91 @@ def deduplicate_results(
 
 
 # ============================================================================
+# ============================================================================
+# GOOGLE SHEETS JOB ARCHIVE
+# ============================================================================
+
+def send_job_to_google_sheets(
+    job: Dict[str, Any],
+) -> bool:
+    """
+    Send a discovered job URL to the Google Apps Script Web App.
+
+    The URL is the authoritative identifier. Google Apps Script is
+    responsible for retrieving and archiving the full vacancy.
+    """
+
+    if not SEND_RESULTS_TO_GOOGLE_SHEETS:
+        return False
+
+    job_url = normalise_url(
+        job.get("url", "")
+    )
+
+    if not job_url:
+        return False
+
+    payload = {
+        "action": "archive_job",
+        "url": job_url,
+        "company": job.get("company", ""),
+        "title": job.get("title", ""),
+        "location": job.get("location", ""),
+        "method": job.get("method", ""),
+        "matched_keywords": job.get(
+            "matched_keywords",
+            "",
+        ),
+        "discovered_at": datetime.now().isoformat(),
+    }
+
+    try:
+
+        response = requests.post(
+            GOOGLE_SHEETS_WEBHOOK_URL,
+            json=payload,
+            headers={
+                **HEADERS,
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            console.print(
+                f"[yellow]"
+                f"Google Sheets returned HTTP "
+                f"{response.status_code} for {job_url}"
+                f"[/yellow]"
+            )
+            return False
+
+        try:
+            result = response.json()
+        except ValueError:
+            result = {}
+
+        if result.get("success") is True:
+            return True
+
+        console.print(
+            f"[yellow]"
+            f"Google Sheets did not confirm archive: "
+            f"{result}"
+            f"[/yellow]"
+        )
+
+        return False
+
+    except requests.RequestException as exc:
+
+        console.print(
+            f"[yellow]"
+            f"Google Sheets connection failed: {exc}"
+            f"[/yellow]"
+        )
+
+        return False
 # CSV EXPORT
 # ============================================================================
 
