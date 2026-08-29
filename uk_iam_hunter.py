@@ -1,66 +1,35 @@
+#!/usr/bin/env python3
 """
-UK IAM / PAM JOB HUNTER - v2
-=============================
+UK IAM / PAM JOB DISCOVERY ENGINE v2
+====================================
 
-Purpose
--------
-Find substantially more UK IAM/PAM vacancies than a simple careers-page crawler.
+Designed for:
+- UK permanent IAM / PAM / Identity Security jobs
+- UK location: London, regional UK, remote UK, hybrid UK, onsite UK
+- Official company career sites first
+- Public ATS APIs where available
+- Sitemap / robots.txt discovery
+- Deep internal career-page crawling
+- Search-engine discovery (Google/Bing HTML search) as a discovery accelerator
+- Only accepts results from configured official domains or recognised ATS domains
+- Optional Google Apps Script webhook
+- CSV + JSON output
+- Strong deduplication and source auditing
 
-Discovery layers:
-1. Official company career pages already in the company database
-2. External career portals linked from those official pages
-3. ATS discovery from links, scripts, iframes and page source
-4. Common ATS endpoints where they can be discovered automatically
-5. robots.txt / sitemap.xml discovery
-6. Deep crawling of career/search/result pages
-7. Playwright rendering for JavaScript-heavy portals
-8. Search-engine discovery (Bing/Google result pages) as a discovery aid
-   - ONLY results whose destination is an official company/ATS job page are kept
-9. Structured JobPosting JSON-LD extraction
-10. Generic job-page extraction
-11. Strict UK + IAM/PAM relevance scoring
-12. URL/title deduplication
-13. CSV export
-14. Optional Google Apps Script archiving
+Install:
+    pip install requests beautifulsoup4 rich
+Optional JS rendering:
+    pip install playwright
+    playwright install chromium
 
-IMPORTANT
----------
-- This script does NOT use your manually discovered individual vacancy URLs.
-- It is designed for permanent UK IAM/PAM searching.
-- Search engines are used to discover pages, not as the final source of truth.
-- A result is retained only when the actual destination is an official company
-  careers page or a recognised ATS host.
-- The company database can be expanded without changing the crawler.
-
-Install
--------
-pip install requests beautifulsoup4 rich
-pip install playwright
-playwright install chromium
-
-Optional:
-pip install lxml
-
-Run
----
-python uk_iam_job_hunter_v2.py
-
-The script creates:
-- uk_iam_results_v2.csv
-- uk_iam_source_audit_v2.csv
-- uk_iam_run_log_v2.csv
-
-Google Apps Script:
-Set GOOGLE_APPS_SCRIPT_URL and GOOGLE_APPS_SCRIPT_TOKEN below if you want
-newly discovered jobs archived automatically into your Google Sheet/Drive.
-ARCHIVE_TO_GOOGLE = False by default so the first test cannot accidentally
-populate the archive with bad matches.
+Run:
+    python uk_iam_job_engine.py
 """
 
 from __future__ import annotations
 
 import csv
-import html
+import html as html_lib
 import json
 import re
 import sys
@@ -69,13 +38,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-from urllib.parse import (
-    parse_qsl,
-    urlencode,
-    urljoin,
-    urlparse,
-    urlunparse,
-)
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -88,46 +51,62 @@ try:
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
-
 console = Console()
 
-
-# ============================================================================
+# =============================================================================
 # CONFIGURATION
-# ============================================================================
+# =============================================================================
 
 REQUEST_TIMEOUT = 18
 JOB_REQUEST_TIMEOUT = 15
-SEARCH_TIMEOUT = 12
+MAX_WORKERS = 8
 
-MAX_WORKERS = 10
+# Deep crawl controls.
+MAX_PAGES_PER_COMPANY = 18
+MAX_JOB_LINKS_PER_COMPANY = 180
+MAX_SITEMAP_URLS_PER_COMPANY = 500
+MAX_SEARCH_RESULTS_PER_QUERY = 12
+MAX_SEARCH_QUERIES_PER_COMPANY = 8
 
-# Deep crawling limits.
-MAX_PAGES_PER_SOURCE = 18
-MAX_JOB_LINKS_PER_SOURCE = 250
-MAX_SEARCH_RESULTS_PER_QUERY = 15
-MAX_SEARCH_QUERIES_PER_COMPANY = 10
-
-# Search engine discovery can be disabled if you want pure direct-source mode.
+# Search engine discovery. This is intentionally an accelerator, not the source
+# of truth. A result is accepted only if its domain is an official configured
+# domain or an allow-listed ATS domain.
 USE_SEARCH_DISCOVERY = True
+SEARCH_ENGINES = ["bing", "google"]
 
-# Browser rendering is slower but important for modern ATS platforms.
-USE_PLAYWRIGHT = True
+# JavaScript rendering. Keep enabled; requests is always attempted first.
+USE_PLAYWRIGHT_FALLBACK = True
+PLAYWRIGHT_TIMEOUT_MS = 35000
 
-# First test should be False.
-ARCHIVE_TO_GOOGLE = False
+# Only turn this on after you have tested the scanner.
+SEND_TO_APPS_SCRIPT = False
 
-GOOGLE_APPS_SCRIPT_URL = (
+# Your deployed Apps Script endpoint. The scanner will NOT call it unless
+# SEND_TO_APPS_SCRIPT = True.
+APPS_SCRIPT_WEBHOOK = (
     "https://script.google.com/macros/s/"
     "AKfycbzAxS5Keh8vArI6xXwWc-SmU6DN-FkTcKDVONmEMCLdfxgrQR-vPoDfloxGK8Z0MVBssg/"
     "exec"
 )
+APPS_SCRIPT_TOKEN = "IAMJOBSEARCHAUGUST2026"
 
-GOOGLE_APPS_SCRIPT_TOKEN = "IAMJOBSEARCHAUGUST2026"
+WRITE_CSV = True
+WRITE_JSON = True
+CSV_FILENAME = "uk_iam_results.csv"
 
-RESULT_CSV = "uk_iam_results_v2.csv"
-AUDIT_CSV = "uk_iam_source_audit_v2.csv"
-RUN_LOG_CSV = "uk_iam_run_log_v2.csv"
+# Fast validation mode. Set to False for the full company database scan.
+TEST_MODE = True
+TEST_COMPANY_LIMIT = 12
+
+# Save results after every completed company/API batch so an interrupted scan
+# never loses everything discovered before the interruption.
+INCREMENTAL_CSV_SAVE = True
+JSON_FILENAME = "uk_iam_results.json"
+
+# If True, jobs with an explicit future/old posting date are still returned.
+# Set a number to limit results to jobs posted within N days when a posting date
+# can be extracted. Jobs with no detectable date are retained.
+POSTED_WITHIN_DAYS: Optional[int] = None
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -138,16 +117,12 @@ USER_AGENT = (
 HEADERS = {
     "User-Agent": USER_AGENT,
     "Accept-Language": "en-GB,en;q=0.9",
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;"
-        "q=0.9,image/avif,image/webp,*/*;q=0.8"
-    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-
-# ============================================================================
-# ATS DOMAINS
-# ============================================================================
+# =============================================================================
+# ATS ALLOW-LIST
+# =============================================================================
 
 ATS_DOMAINS = {
     "myworkdayjobs.com": "Workday",
@@ -162,212 +137,106 @@ ATS_DOMAINS = {
     "workable.com": "Workable",
     "taleo.net": "Taleo",
     "jobvite.com": "Jobvite",
-    "bamboohr.com": "BambooHR",
     "recruitee.com": "Recruitee",
-    "personio.com": "Personio",
-    "applytojob.com": "ApplyToJob",
-    "phenompeople.com": "Phenom",
-    "ultipro.com": "UKG",
-    "ukg.com": "UKG",
+    "pinpointhq.com": "Pinpoint",
+    "bamboohr.com": "BambooHR",
 }
 
+# =============================================================================
+# TARGET ROLE / TECHNOLOGY KEYWORDS
+# =============================================================================
 
-# ============================================================================
-# COMPANY DATABASE
-# ============================================================================
-
-COMPANY_CAREERS = [
-    ("HSBC Holdings plc", "https://www.hsbc.com/careers"),
-    ("Lloyds Banking Group plc", "https://www.lloydsbankinggroup.com/careers.html"),
-    ("NatWest Group plc", "https://www.natwestgroup.com/careers-at-natwest-group.html"),
-    ("Standard Chartered PLC", "https://www.standardchartered.com/en/careers"),
-    ("Aviva plc", "https://www.aviva.com/careers/"),
-    ("Schroders plc", "https://www.schroders.com/en-gb/uk/institutional/about-us/careers/"),
-    ("Man Group plc", "https://www.man.com/careers"),
-    ("Vodafone Group", "https://careers.vodafone.com/"),
-    ("BT Group", "https://jobs.bt.com/"),
-    ("Sky UK", "https://careers.sky.com/jobs"),
-    ("Legal & General", "https://careers.legalandgeneral.com/"),
-    ("Wise", "https://wise.jobs/"),
-    ("BAE Systems", "https://www.baesystems.com/careers/"),
-    ("Rolls-Royce", "https://careers.rolls-royce.com/our-locations/uk"),
-    ("QinetiQ", "https://www.qinetiq.com/en-gb/careers"),
-    ("GSK", "https://www.gsk.com/en-gb/careers/"),
-    ("Kingfisher plc", "https://careers.kingfisher.com/"),
-    ("Ocado Group", "https://careers.ocadogroup.com/"),
-    ("National Grid", "https://www.nationalgrid.com/careers?region=uk"),
-    ("Centrica", "https://www.centrica.com/careers"),
-    ("SSE", "https://careers.sse.com/"),
-    ("AstraZeneca", "https://careers.astrazeneca.com/search-jobs/united-kingdom"),
-    ("Unilever UK", "https://careers.unilever.com/en/united-kingdom-and-ireland"),
-    ("easyJet", "https://careers.easyjet.com/en"),
-    ("Heathrow Airport", "https://www.heathrow.com/company/careers"),
-    ("Royal Mail Group", "https://careers.royalmailgroup.com/gb/en"),
-    ("DHL International UK", "https://careers.dhl.com/global/en/dhl-uk"),
-    ("Serco", "https://www.serco.com/uk/careers"),
-    ("Sopra Steria UK", "https://careers.soprasteria.co.uk/uk/en"),
-    ("Computacenter", "https://careers.computacenter.com/uk/"),
-    ("EY UK", "https://careers.ey.com/?locale=en_GB"),
-    ("KPMG UK", "https://kpmg.com/uk/en/careers.html"),
-    ("PwC UK", "https://www.pwc.co.uk/careers"),
-    ("CGI UK", "https://www.cgi.com/uk/en-gb/careers"),
-    ("Goldman Sachs", "https://www.goldmansachs.com/careers/"),
-    ("Morgan Stanley", "https://www.morganstanley.com/careers/career-opportunities-search/"),
-    ("Apple UK", "https://jobs.apple.com/en-us/search?location=united-kingdom-GBR"),
-    ("University of Cambridge", "https://www.jobs.cam.ac.uk/"),
+# Title terms are deliberately broad enough to catch security roles where IAM
+# is in the description rather than the title.
+ROLE_KEYWORDS = [
+    "IAM",
+    "Identity and Access Management",
+    "Identity & Access Management",
+    "Identity Management",
+    "Access Management",
+    "Identity Engineer",
+    "Identity Architect",
+    "Identity Analyst",
+    "Identity Consultant",
+    "Identity Specialist",
+    "Identity Security",
+    "Identity Platform",
+    "Identity Product",
+    "Identity Service",
+    "Access Governance",
+    "Identity Governance",
+    "IGA",
+    "PAM",
+    "Privileged Access Management",
+    "Privileged Access",
+    "Privileged Identity",
+    "Privileged Account",
+    "CyberArk",
+    "SailPoint",
+    "BeyondTrust",
+    "Delinea",
+    "One Identity",
+    "Saviynt",
+    "Okta",
+    "Ping Identity",
+    "PingFederate",
+    "ForgeRock",
+    "IdentityNow",
+    "IdentityIQ",
+    "Entra ID",
+    "Microsoft Entra",
+    "Azure AD",
+    "Azure Active Directory",
+    "Privileged Identity Management",
+    "PIM",
+    "Conditional Access",
+    "Access Reviews",
+    "Access Certification",
+    "Entitlement Management",
+    "HashiCorp Vault",
 ]
 
-
-# ============================================================================
-# KEYWORD MODEL
-# ============================================================================
-
-TITLE_STRONG = [
-    "iam",
-    "identity engineer",
-    "identity analyst",
-    "identity architect",
-    "identity consultant",
-    "identity specialist",
-    "identity security",
-    "identity governance",
-    "access management",
-    "access governance",
-    "privileged access",
-    "privileged identity",
-    "pam engineer",
-    "pam analyst",
-    "pam architect",
-    "cyberark",
-    "sailpoint",
-    "saviynt",
-    "okta engineer",
-    "entra id",
-    "identity platform",
-    "identity product",
+# Terms that commonly identify an adjacent cyber/security job with meaningful
+# identity responsibility. These only help if an identity term is also present.
+SECURITY_CONTEXT = [
+    "Cyber Security",
+    "Cybersecurity",
+    "Information Security",
+    "Cloud Security",
+    "Security Engineer",
+    "Security Architect",
+    "Security Consultant",
+    "Security Analyst",
+    "Zero Trust",
+    "Authentication",
+    "Authorisation",
+    "Authorization",
+    "RBAC",
+    "SSO",
+    "Single Sign-On",
+    "Federation",
 ]
 
-IDENTITY_TERMS = [
-    "identity and access management",
-    "identity access management",
-    "identity management",
-    "access management",
-    "identity governance",
-    "access governance",
-    "identity security",
-    "identity lifecycle",
-    "joiner mover leaver",
-    "joiner-mover-leaver",
-    "jml",
-    "iga",
-    "entitlement management",
-    "access reviews",
-    "access certification",
-    "provisioning",
-    "deprovisioning",
-    "scim",
-    "sso",
-    "single sign-on",
-    "federation",
-]
-
-PAM_TERMS = [
-    "privileged access management",
-    "privileged access",
-    "privileged identity",
-    "privileged account",
-    "pam",
-    "cyberark",
-    "beyondtrust",
-    "delinea",
-    "one identity",
-    "secret server",
-    "secrets management",
-    "vault",
-    "session monitoring",
-]
-
-MICROSOFT_TERMS = [
-    "entra id",
-    "microsoft entra",
-    "azure ad",
-    "azure active directory",
-    "privileged identity management",
-    "pim",
-    "conditional access",
-    "authentication strength",
-    "passwordless",
-    "microsoft graph",
-    "graph api",
-    "azure identity",
-]
-
-PLATFORM_TERMS = [
-    "okta",
-    "ping identity",
-    "pingfederate",
-    "forgerock",
-    "saviynt",
-    "sailpoint",
-    "identitynow",
-    "identityiq",
-    "hashicorp vault",
-]
-
-SECURITY_CONTEXT_TERMS = [
-    "zero trust",
-    "cyber security",
-    "cybersecurity",
-    "security operations",
-    "security engineering",
-    "cloud security",
-    "information security",
-    "access control",
-    "rbac",
-    "least privilege",
-]
-
-EXCLUDE_TITLE = [
-    "intern",
+# Exclude obvious non-role pages.
+EXCLUDED_TITLE_TERMS = [
     "internship",
-    "graduate scheme",
+    "intern",
     "apprentice",
-    "apprenticeship",
-    "receptionist",
-    "sales representative",
-    "account executive",
-    "marketing",
-    "software developer",
-    "software engineer",
-    "frontend",
-    "backend",
-    "data scientist",
-    "machine learning engineer",
-    "mechanical engineer",
+    "graduate programme",
+    "graduate program",
+    "school leaver",
+    "talent acquisition",
+    "recruitment coordinator",
 ]
 
-PERMANENT_TERMS = [
-    "permanent",
-    "full time",
-    "full-time",
-    "employee",
-]
-
-CONTRACT_TERMS = [
-    "contract",
-    "contractor",
-    "temporary",
-    "fixed term",
-    "fixed-term",
-    "interim",
-    "day rate",
-    "inside ir35",
-    "outside ir35",
-]
+# =============================================================================
+# UK LOCATION / WORKING ARRANGEMENT
+# =============================================================================
 
 UK_TERMS = [
     "united kingdom",
     "uk",
+    "u.k.",
     "england",
     "scotland",
     "wales",
@@ -395,48 +264,146 @@ UK_TERMS = [
     "slough",
     "portsmouth",
     "havant",
+    "coventry",
+    "derby",
+    "york",
+    "exeter",
+    "liverpool",
+    "newport",
     "remote uk",
     "uk remote",
     "remote, uk",
     "remote - uk",
+    "remote within the uk",
+    "based in the uk",
 ]
 
-# Search queries are deliberately varied because one query almost never
-# exposes every vacancy on a corporate ATS.
-SEARCH_TEMPLATES = [
-    '"{company}" IAM jobs UK',
-    '"{company}" "identity" jobs UK',
-    '"{company}" "identity engineer" UK',
-    '"{company}" "identity analyst" UK',
-    '"{company}" "identity and access management" UK',
-    '"{company}" "access management" UK',
-    '"{company}" "privileged access" UK',
-    '"{company}" CyberArk UK jobs',
-    '"{company}" SailPoint UK jobs',
-    '"{company}" Saviynt UK jobs',
+WORKING_ARRANGEMENT_TERMS = [
+    "remote",
+    "hybrid",
+    "onsite",
+    "on-site",
+    "office-based",
+    "office based",
 ]
 
+EMPLOYMENT_TERMS = [
+    "permanent",
+    "full-time",
+    "full time",
+]
 
-# ============================================================================
-# DATA CLASSES
-# ============================================================================
+# =============================================================================
+# OFFICIAL COMPANY SOURCES
+# =============================================================================
 
-@dataclass
-class Page:
-    url: str
-    html: str
-    final_url: str
-    source: str
+# Each company can have several seeds. More seeds = deeper discovery.
+COMPANIES: List[Dict[str, Any]] = [
+    # Banking / financial services
+    {"id": "HSBC", "name": "HSBC", "domains": ["hsbc.com"], "seeds": ["https://www.hsbc.com/careers"]},
+    {"id": "LLOYDS", "name": "Lloyds Banking Group", "domains": ["lloydsbankinggroup.com", "lloydsbankinggroupcareers.co.uk"], "seeds": ["https://www.lloydsbankinggroup.com/careers.html"]},
+    {"id": "NATWEST", "name": "NatWest Group", "domains": ["natwestgroup.com"], "seeds": ["https://www.natwestgroup.com/careers-at-natwest-group.html", "https://jobs.natwestgroup.com/"]},
+    {"id": "BARCLAYS", "name": "Barclays", "domains": ["search.jobs.barclays"], "seeds": ["https://search.jobs.barclays/"]},
+    {"id": "STANDARD_CHARTERED", "name": "Standard Chartered", "domains": ["sc.com", "standardchartered.com"], "seeds": ["https://www.sc.com/en/global-careers/"]},
+    {"id": "AVIVA", "name": "Aviva", "domains": ["aviva.com", "careers.aviva.com"], "seeds": ["https://www.aviva.com/careers/"]},
+    {"id": "SCHRODERS", "name": "Schroders", "domains": ["schroders.com"], "seeds": ["https://www.schroders.com/en-gb/uk/institutional/about-us/careers/"]},
+    {"id": "MAN_GROUP", "name": "Man Group", "domains": ["man.com"], "seeds": ["https://www.man.com/careers"]},
+    {"id": "GOLDMAN", "name": "Goldman Sachs", "domains": ["goldmansachs.com"], "seeds": ["https://www.goldmansachs.com/careers/"]},
+    {"id": "MORGAN_STANLEY", "name": "Morgan Stanley", "domains": ["morganstanley.com"], "seeds": ["https://www.morganstanley.com/careers/career-opportunities-search/"]},
+    {"id": "JPMORGAN", "name": "JPMorgan Chase", "domains": ["jpmorganchase.com"], "seeds": ["https://www.jpmorganchase.com/careers"]},
+    {"id": "CITI", "name": "Citi", "domains": ["jobs.citi.com"], "seeds": ["https://jobs.citi.com/"]},
+    {"id": "MUFG", "name": "MUFG", "domains": ["mufg.co.uk", "mufgcareers.com"], "seeds": ["https://www.mufg.co.uk/careers"]},
+    {"id": "DEUTSCHE_BANK", "name": "Deutsche Bank", "domains": ["db.com"], "seeds": ["https://careers.db.com/"]},
+    {"id": "UBS", "name": "UBS", "domains": ["ubs.com"], "seeds": ["https://www.ubs.com/global/en/careers.html"]},
 
+    # Fintech
+    {"id": "WISE", "name": "Wise", "domains": ["wise.jobs", "wise.com"], "seeds": ["https://wise.jobs/"]},
+    {"id": "MONZO", "name": "Monzo", "domains": ["monzo.com", "greenhouse.io"], "seeds": ["https://monzo.com/careers"]},
+    {"id": "REVOLUT", "name": "Revolut", "domains": ["revolut.com", "lever.co"], "seeds": ["https://www.revolut.com/careers/"]},
+    {"id": "STARLING", "name": "Starling Bank", "domains": ["starlingbank.com", "workable.com"], "seeds": ["https://www.starlingbank.com/careers/"]},
+    {"id": "CHECKOUT", "name": "Checkout.com", "domains": ["checkout.com", "greenhouse.io"], "seeds": ["https://www.checkout.com/careers"]},
+    {"id": "DELIVEROO", "name": "Deliveroo", "domains": ["deliveroo.co.uk", "greenhouse.io"], "seeds": ["https://careers.deliveroo.co.uk/"]},
+    {"id": "OCTOPUS", "name": "Octopus Energy", "domains": ["octopus.energy"], "seeds": ["https://octopus.energy/careers/"]},
 
-# ============================================================================
-# HTTP
-# ============================================================================
+    # Telecommunications / technology
+    {"id": "BT", "name": "BT Group", "domains": ["jobs.bt.com"], "seeds": ["https://jobs.bt.com/BT/", "https://jobs.bt.com/BT/viewalljobs/"]},
+    {"id": "OPENREACH", "name": "Openreach", "domains": ["jobs.bt.com"], "seeds": ["https://jobs.bt.com/Openreach/viewalljobs/"]},
+    {"id": "VODAFONE", "name": "Vodafone / VodafoneThree", "domains": ["careers.vodafone.com"], "seeds": ["https://careers.vodafone.com/", "https://careers.vodafone.com/uk/"]},
+    {"id": "VIRGIN_MEDIA_O2", "name": "Virgin Media O2", "domains": ["virginmediao2.co.uk"], "seeds": ["https://www.virginmediao2.co.uk/careers"]},
+    {"id": "SKY", "name": "Sky", "domains": ["sky.com", "careers.sky.com"], "seeds": ["https://careers.sky.com/jobs"]},
+    {"id": "SOFTCAT", "name": "Softcat", "domains": ["softcat.com"], "seeds": ["https://www.softcat.com/careers"]},
+    {"id": "CANONICAL", "name": "Canonical", "domains": ["canonical.com", "lever.co"], "seeds": ["https://canonical.com/careers"]},
+
+    # Transport / aviation / rail
+    {"id": "NETWORK_RAIL", "name": "Network Rail", "domains": ["networkrail.co.uk", "operationscareers.networkrail.co.uk"], "seeds": ["https://www.networkrail.co.uk/careers/", "https://operationscareers.networkrail.co.uk/role-search/"]},
+    {"id": "EASYJET", "name": "easyJet", "domains": ["easyjet.com", "careers.easyjet.com"], "seeds": ["https://careers.easyjet.com/en"]},
+    {"id": "BRITISH_AIRWAYS", "name": "British Airways", "domains": ["ba.com"], "seeds": ["https://careers.ba.com/"]},
+    {"id": "VIRGIN_ATLANTIC", "name": "Virgin Atlantic", "domains": ["virginatlantic.com"], "seeds": ["https://careers.virginatlantic.com/"]},
+    {"id": "HEATHROW", "name": "Heathrow Airport", "domains": ["heathrow.com"], "seeds": ["https://www.heathrow.com/company/careers"]},
+    {"id": "ROYAL_MAIL", "name": "Royal Mail Group", "domains": ["royalmailgroup.com"], "seeds": ["https://careers.royalmailgroup.com/gb/en"]},
+    {"id": "DHL", "name": "DHL UK", "domains": ["dhl.com"], "seeds": ["https://careers.dhl.com/global/en/dhl-uk"]},
+
+    # Energy / utilities
+    {"id": "SSE", "name": "SSE", "domains": ["sse.com", "careers.sse.com"], "seeds": ["https://careers.sse.com/"]},
+    {"id": "NATIONAL_GRID", "name": "National Grid", "domains": ["nationalgrid.com", "jobs.nationalgrid.com"], "seeds": ["https://www.nationalgrid.com/careers?region=uk", "https://jobs.nationalgrid.com/uk/jobs"]},
+    {"id": "CENTRICA", "name": "Centrica", "domains": ["centrica.com"], "seeds": ["https://www.centrica.com/careers"]},
+    {"id": "ENERGY_UTILITIES_JOBS", "name": "Energy & Utilities Jobs", "domains": ["energyutilitiesjobs.co.uk"], "seeds": ["https://careers.energyutilitiesjobs.co.uk/"]},
+
+    # Public sector / NHS / government-adjacent
+    {"id": "NHS_JOBS", "name": "NHS Jobs", "domains": ["jobs.nhs.uk"], "seeds": ["https://www.jobs.nhs.uk/"]},
+    {"id": "NHS_SCOTLAND", "name": "NHS Scotland", "domains": ["careers.nhs.scot"], "seeds": ["https://careers.nhs.scot/"]},
+    {"id": "GCHQ", "name": "GCHQ", "domains": ["gchq-careers.co.uk"], "seeds": ["https://www.gchq-careers.co.uk/"]},
+
+    # Consulting / technology services
+    {"id": "COMPUTACENTER", "name": "Computacenter", "domains": ["computacenter.com", "careers.computacenter.com"], "seeds": ["https://careers.computacenter.com/uk/"]},
+    {"id": "SERCO", "name": "Serco", "domains": ["serco.com", "careers.serco.com"], "seeds": ["https://www.serco.com/uk/careers", "https://careers.serco.com/gb/en"]},
+    {"id": "SOPRA_STERIA", "name": "Sopra Steria", "domains": ["soprasteria.com", "careers.soprasteria.co.uk"], "seeds": ["https://careers.soprasteria.co.uk/uk/en"]},
+    {"id": "CGI", "name": "CGI UK", "domains": ["cgi.com"], "seeds": ["https://www.cgi.com/uk/en-gb/careers"]},
+    {"id": "DELOITTE", "name": "Deloitte UK", "domains": ["deloitte.com"], "seeds": ["https://apply.deloitte.com/"]},
+    {"id": "EY", "name": "EY UK", "domains": ["ey.com", "careers.ey.com"], "seeds": ["https://careers.ey.com/"]},
+    {"id": "KPMG", "name": "KPMG UK", "domains": ["kpmg.com"], "seeds": ["https://kpmg.com/uk/en/careers.html"]},
+    {"id": "PWC", "name": "PwC UK", "domains": ["pwc.co.uk", "jobs.pwc.co.uk"], "seeds": ["https://www.pwc.co.uk/careers", "https://jobs.pwc.co.uk/uk/en/"]},
+
+    # Large enterprise / pharma / engineering
+    {"id": "BAE", "name": "BAE Systems", "domains": ["baesystems.com"], "seeds": ["https://www.baesystems.com/careers/"]},
+    {"id": "ROLLS_ROYCE", "name": "Rolls-Royce", "domains": ["rolls-royce.com", "careers.rolls-royce.com"], "seeds": ["https://careers.rolls-royce.com/our-locations/uk"]},
+    {"id": "QINETIQ", "name": "QinetiQ", "domains": ["qinetiq.com", "careers.qinetiq.com"], "seeds": ["https://www.qinetiq.com/en-gb/careers", "https://careers.qinetiq.com/"]},
+    {"id": "GSK", "name": "GSK", "domains": ["gsk.com", "careers.gsk.com"], "seeds": ["https://www.gsk.com/en-gb/careers/"]},
+    {"id": "ASTRAZENECA", "name": "AstraZeneca", "domains": ["astrazeneca.com", "careers.astrazeneca.com"], "seeds": ["https://careers.astrazeneca.com/search-jobs/united-kingdom"]},
+    {"id": "UNILEVER", "name": "Unilever UK", "domains": ["unilever.com", "careers.unilever.com"], "seeds": ["https://careers.unilever.com/en/united-kingdom-and-ireland"]},
+    {"id": "KINGFISHER", "name": "Kingfisher", "domains": ["kingfisher.com", "careers.kingfisher.com"], "seeds": ["https://careers.kingfisher.com/"]},
+    {"id": "OCADO", "name": "Ocado Group", "domains": ["ocado.com", "careers.ocadogroup.com"], "seeds": ["https://careers.ocadogroup.com/"]},
+    {"id": "APPLE_UK", "name": "Apple UK", "domains": ["jobs.apple.com"], "seeds": ["https://jobs.apple.com/en-gb/search?location=united-kingdom-GBR"]},
+    {"id": "MICROSOFT_UK", "name": "Microsoft UK", "domains": ["jobs.careers.microsoft.com", "microsoft.com"], "seeds": ["https://jobs.careers.microsoft.com/global/en/search"]},
+    {"id": "UNIVERSITY_CAMBRIDGE", "name": "University of Cambridge", "domains": ["jobs.cam.ac.uk"], "seeds": ["https://www.jobs.cam.ac.uk/"]},
+
+    # Oracle Recruiting / user-provided public enterprise board
+    {"id": "ORACLE_CX_1003", "name": "Oracle Recruiting CX_1003", "domains": ["oraclecloud.com"], "seeds": ["https://don.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1003/"]},
+]
+
+# =============================================================================
+# PUBLIC ATS BOARD IDs
+# =============================================================================
+
+ATS_BOARDS = [
+    ("Monzo", "greenhouse", "monzo"),
+    ("Deliveroo", "greenhouse", "deliveroo"),
+    ("Checkout.com", "greenhouse", "checkoutcom"),
+    ("Darktrace", "greenhouse", "darktrace"),
+    ("Sophos", "greenhouse", "sophos"),
+    ("Revolut", "lever", "revolut"),
+    ("Canonical", "lever", "canonical"),
+    ("Starling Bank", "workable", "starling-bank"),
+]
+
+# =============================================================================
+# URL / HTTP HELPERS
+# =============================================================================
 
 def make_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    return session
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    return s
 
 
 def normalise_url(url: str) -> str:
@@ -452,22 +419,21 @@ def host(url: str) -> str:
         return ""
 
 
-def root_domain(url: str) -> str:
+def registrableish_host(url: str) -> str:
+    """Good enough for configured corporate/ATS allow-list checks."""
     h = host(url)
     parts = h.split(".")
-    return ".".join(parts[-2:]) if len(parts) >= 2 else h
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return h
 
 
-def ats_platform(url: str) -> str:
+def detect_ats(url: str) -> Optional[str]:
     h = host(url)
     for domain, name in ATS_DOMAINS.items():
         if h == domain or h.endswith("." + domain):
             return name
-    return ""
-
-
-def is_ats(url: str) -> bool:
-    return bool(ats_platform(url))
+    return None
 
 
 def fetch(session: requests.Session, url: str, timeout: int = REQUEST_TIMEOUT) -> Optional[requests.Response]:
@@ -480,1274 +446,1033 @@ def fetch(session: requests.Session, url: str, timeout: int = REQUEST_TIMEOUT) -
         return None
 
 
-# ============================================================================
-# TEXT / HTML
-# ============================================================================
-
-def soup_text(html_text: str) -> str:
-    soup = BeautifulSoup(html_text, "html.parser")
-    for tag in soup(["script", "style", "noscript", "svg"]):
-        tag.decompose()
-    return re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+def is_html_response(r: requests.Response) -> bool:
+    ct = r.headers.get("content-type", "").lower()
+    return "html" in ct or "xml" in ct or not ct
 
 
-def clean_html_description(value: str) -> str:
-    return soup_text(value)
+def same_domain_or_subdomain(url: str, configured_domains: Iterable[str]) -> bool:
+    h = host(url)
+    for d in configured_domains:
+        d = d.lower().strip()
+        if h == d or h.endswith("." + d):
+            return True
+    return False
 
 
-def decode_entities(text: str) -> str:
-    return html.unescape(text or "")
+def allowed_result_url(url: str, company: Dict[str, Any]) -> bool:
+    if same_domain_or_subdomain(url, company["domains"]):
+        return True
+    if detect_ats(url):
+        return True
+    return False
 
+# =============================================================================
+# KEYWORD / MATCHING
+# =============================================================================
 
-# ============================================================================
-# URL CANONICALISATION
-# ============================================================================
-
-TRACKING_PARAMS = {
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "source", "ref", "referrer", "fbclid", "gclid",
-}
-
-
-def canonical_url(url: str) -> str:
-    if not url:
-        return ""
-
-    try:
-        p = urlparse(url)
-        query = [
-            (k, v)
-            for k, v in parse_qsl(p.query, keep_blank_values=True)
-            if k.lower() not in TRACKING_PARAMS
-        ]
-        path = re.sub(r"/+", "/", p.path).rstrip("/")
-
-        return urlunparse((
-            p.scheme.lower() or "https",
-            p.netloc.lower(),
-            path,
-            "",
-            urlencode(query),
-            "",
-        )).lower()
-    except Exception:
-        return url.strip().rstrip("/").lower()
-
-
-# ============================================================================
-# KEYWORD / RELEVANCE ENGINE
-# ============================================================================
-
-def phrase_found(phrase: str, text: str) -> bool:
-    if not phrase or not text:
+def keyword_found(keyword: str, text: str) -> bool:
+    if not keyword or not text:
         return False
-
-    if len(phrase) <= 4:
-        return re.search(
-            rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])",
-            text,
-            re.I,
-        ) is not None
-
-    return phrase.lower() in text.lower()
+    if len(keyword) <= 4:
+        pattern = rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])"
+    else:
+        pattern = re.escape(keyword)
+    return re.search(pattern, text, re.I) is not None
 
 
-def matched_terms(text: str, terms: Iterable[str]) -> List[str]:
-    return [t for t in terms if phrase_found(t, text)]
+def matched_keywords(text: str) -> List[str]:
+    return [k for k in ROLE_KEYWORDS if keyword_found(k, text)]
 
 
-def score_job(title: str, description: str, location: str, url: str) -> Tuple[int, List[str], List[str]]:
-    t = title.lower()
-    d = description.lower()
-    l = location.lower()
-    u = url.lower()
-
-    title_hits = matched_terms(t, TITLE_STRONG)
-    identity_hits = matched_terms(d, IDENTITY_TERMS)
-    pam_hits = matched_terms(d, PAM_TERMS)
-    ms_hits = matched_terms(d, MICROSOFT_TERMS)
-    platform_hits = matched_terms(d, PLATFORM_TERMS)
-    security_hits = matched_terms(d, SECURITY_CONTEXT_TERMS)
-    uk_hits = matched_terms(f"{l} {d} {u}", UK_TERMS)
-
-    score = 0
-
-    score += min(50, len(title_hits) * 25)
-    score += min(25, len(identity_hits) * 5)
-    score += min(25, len(pam_hits) * 7)
-    score += min(20, len(ms_hits) * 4)
-    score += min(15, len(platform_hits) * 5)
-    score += min(10, len(security_hits) * 2)
-
-    if title_hits:
-        score += 20
-
-    # A role called "Cloud Security Engineer" can be valid if the body is
-    # strongly identity/PAM focused, but not merely because "security" occurs.
-    body_identity_count = (
-        len(identity_hits)
-        + len(pam_hits)
-        + len(ms_hits)
-        + len(platform_hits)
-    )
-
-    if body_identity_count >= 3:
-        score += 20
-
-    # Strong penalty for obvious unrelated roles.
-    exclude_hits = matched_terms(t, EXCLUDE_TITLE)
-    score -= len(exclude_hits) * 50
-
-    # Contract-only roles are excluded later, but scoring makes them obvious.
-    contract_hits = matched_terms(d, CONTRACT_TERMS)
-    permanent_hits = matched_terms(d, PERMANENT_TERMS)
-
-    if contract_hits and not permanent_hits:
-        score -= 25
-
-    if not uk_hits:
-        score -= 100
-
-    all_hits = (
-        title_hits
-        + identity_hits
-        + pam_hits
-        + ms_hits
-        + platform_hits
-        + security_hits
-    )
-
-    return score, all_hits, contract_hits
+def excluded_title(title: str) -> bool:
+    low = title.lower()
+    return any(x in low for x in EXCLUDED_TITLE_TERMS)
 
 
-def is_uk(location: str, description: str, url: str = "") -> bool:
-    text = f"{location} {description} {url}".lower()
-
-    # Avoid accepting "UK" simply because the corporate page has a global
-    # navigation menu. Prefer actual job/location context where possible.
-    return any(phrase_found(term, text) for term in UK_TERMS)
-
-
-def is_permanent(title: str, description: str) -> bool:
-    text = f"{title} {description}".lower()
-
-    if any(phrase_found(term, text) for term in CONTRACT_TERMS):
-        if not any(phrase_found(term, text) for term in PERMANENT_TERMS):
-            return False
-
-    return True
+def is_uk(text: str) -> bool:
+    low = text.lower()
+    # Avoid treating "uk" inside a larger word as a location.
+    for term in UK_TERMS:
+        if term == "uk":
+            if re.search(r"(?<![a-z])uk(?![a-z])", low):
+                return True
+        elif term in low:
+            return True
+    return False
 
 
-# ============================================================================
-# JSON-LD
-# ============================================================================
+def extract_working_arrangement(text: str) -> str:
+    low = text.lower()
+    found = []
+    for term in WORKING_ARRANGEMENT_TERMS:
+        if term in low and term not in found:
+            found.append(term)
+    return ", ".join(found[:5])
 
-def jsonld_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
-    output = []
 
+def extract_employment_type(text: str) -> str:
+    low = text.lower()
+    if "permanent" in low:
+        return "Permanent"
+    if "fixed term" in low or "fixed-term" in low:
+        return "Fixed-term"
+    if "contract" in low:
+        return "Contract"
+    return ""
+
+
+def is_target_job(title: str, description: str, url: str) -> Tuple[bool, List[str]]:
+    combined = f"{title}\n{description}\n{url}"
+    matches = matched_keywords(combined)
+    if not matches:
+        return False, []
+    if excluded_title(title):
+        return False, matches
+    # Require UK evidence in the job content, not just the company's UK domain.
+    if not is_uk(combined):
+        return False, matches
+    return True, matches
+
+
+# =============================================================================
+# STRUCTURED DATA
+# =============================================================================
+
+def parse_jsonld(soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
+    jobs: List[Dict[str, Any]] = []
     for script in soup.find_all("script", type="application/ld+json"):
         raw = script.string or script.get_text()
         if not raw:
             continue
-
         try:
             data = json.loads(raw)
         except Exception:
             continue
 
-        items = []
-
+        items: List[Any]
         if isinstance(data, list):
             items = data
+        elif isinstance(data, dict) and isinstance(data.get("@graph"), list):
+            items = data["@graph"]
         elif isinstance(data, dict):
-            if isinstance(data.get("@graph"), list):
-                items = data["@graph"]
-            else:
-                items = [data]
+            items = [data]
+        else:
+            continue
 
         for item in items:
-            if isinstance(item, dict):
-                output.append(item)
+            if not isinstance(item, dict):
+                continue
+            typ = item.get("@type")
+            if isinstance(typ, list):
+                is_job = "JobPosting" in typ
+            else:
+                is_job = typ == "JobPosting"
+            if not is_job:
+                continue
 
-    return output
+            title = str(item.get("title", "")).strip()
+            desc = BeautifulSoup(str(item.get("description", "")), "html.parser").get_text(" ", strip=True)
+            loc = extract_jsonld_location(item.get("jobLocation"))
+            url = urljoin(base_url, str(item.get("url") or base_url))
+            date_posted = str(item.get("datePosted", "") or "")
+            employment = str(item.get("employmentType", "") or "")
+            salary = extract_salary(item.get("baseSalary"))
+
+            jobs.append({
+                "title": title,
+                "description": desc,
+                "location": loc,
+                "url": url,
+                "date_posted": date_posted,
+                "employment_type": employment,
+                "salary": salary,
+                "method": "JSON-LD JobPosting",
+            })
+    return jobs
 
 
-def location_from_jsonld(value: Any) -> str:
+def extract_jsonld_location(value: Any) -> str:
     def one(v: Any) -> str:
-        if isinstance(v, str):
-            return v
-
         if not isinstance(v, dict):
-            return ""
-
-        addr = v.get("address", v)
-
-        if isinstance(addr, dict):
+            return str(v or "")
+        address = v.get("address", v)
+        if isinstance(address, dict):
             parts = [
-                addr.get("addressLocality"),
-                addr.get("addressRegion"),
-                addr.get("postalCode"),
-                addr.get("addressCountry"),
+                address.get("addressLocality", ""),
+                address.get("addressRegion", ""),
+                address.get("postalCode", ""),
+                address.get("addressCountry", ""),
             ]
             return ", ".join(str(x) for x in parts if x)
-
-        return str(addr or "")
+        return str(address or "")
 
     if isinstance(value, list):
-        return " | ".join(one(x) for x in value)
-
+        return " | ".join(one(v) for v in value)
     return one(value)
 
 
-def extract_json_jobs(html_text: str, base_url: str) -> List[Dict[str, Any]]:
-    soup = BeautifulSoup(html_text, "html.parser")
-    results = []
-
-    for item in jsonld_items(soup):
-        item_type = item.get("@type", "")
-        types = item_type if isinstance(item_type, list) else [item_type]
-
-        if "JobPosting" not in types:
-            continue
-
-        title = str(item.get("title", "")).strip()
-        description = clean_html_description(str(item.get("description", "")))
-        location = location_from_jsonld(item.get("jobLocation", ""))
-
-        raw_url = item.get("url") or base_url
-        job_url = urljoin(base_url, str(raw_url))
-
-        employment = item.get("employmentType", "")
-        if isinstance(employment, list):
-            employment = ", ".join(map(str, employment))
-
-        date_posted = str(item.get("datePosted", "") or "")
-        valid_through = str(item.get("validThrough", "") or "")
-
-        results.append({
-            "title": title,
-            "description": description,
-            "location": location,
-            "url": job_url,
-            "employment_type": str(employment),
-            "date_posted": date_posted,
-            "valid_through": valid_through,
-            "source_type": "JSON-LD",
-        })
-
-    return results
+def extract_salary(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        currency = value.get("currency", "")
+        val = value.get("value", value)
+        if isinstance(val, dict):
+            low = val.get("minValue", "")
+            high = val.get("maxValue", "")
+            single = val.get("value", "")
+            if low and high:
+                return f"{currency} {low}-{high}".strip()
+            if single:
+                return f"{currency} {single}".strip()
+        return str(value)
+    return str(value)
 
 
-# ============================================================================
-# LINK DISCOVERY
-# ============================================================================
+# =============================================================================
+# GENERIC HTML EXTRACTION
+# =============================================================================
 
-JOB_HINTS = [
+JOB_LINK_HINTS = [
     "job", "jobs", "career", "careers", "vacanc", "opportunit",
-    "position", "opening", "requisition", "apply", "employment",
-    "posting", "search", "viewjob", "jobdetails", "job-detail",
-    "jobdetail", "job-id", "jobid", "jobs/view",
-]
-
-PAGE_HINTS = [
-    "page=", "p=", "start=", "offset=", "next", "load-more",
-    "loadmore", "view-all", "all-jobs", "search-jobs",
-    "search?query", "jobs?query",
+    "position", "opening", "employment", "apply", "requisition",
+    "role", "search", "viewalljobs",
 ]
 
 
-def looks_like_job_url(url: str, anchor_text: str = "") -> bool:
-    text = f"{url} {anchor_text}".lower()
-    return any(x in text for x in JOB_HINTS)
+def looks_like_job_link(url: str, text: str = "") -> bool:
+    s = f"{url} {text}".lower()
+    return any(x in s for x in JOB_LINK_HINTS)
 
 
-def looks_like_pagination(url: str, anchor_text: str = "") -> bool:
-    text = f"{url} {anchor_text}".lower()
-    return any(x in text for x in PAGE_HINTS)
+def looks_like_navigation(url: str, text: str = "") -> bool:
+    s = f"{url} {text}".lower()
+    return any(x in s for x in [
+        "next", "page=", "start=", "offset=", "load more",
+        "view all", "all jobs", "search jobs", "see all",
+    ])
 
 
-def extract_links(html_text: str, page_url: str) -> Tuple[List[str], List[str]]:
-    soup = BeautifulSoup(html_text, "html.parser")
+def extract_location_from_html(soup: BeautifulSoup) -> str:
+    selectors = [
+        '[class*="location"]',
+        '[id*="location"]',
+        '[data-testid*="location"]',
+        '[aria-label*="location" i]',
+    ]
+    for selector in selectors:
+        try:
+            node = soup.select_one(selector)
+        except Exception:
+            node = None
+        if node:
+            value = node.get_text(" ", strip=True)
+            if value:
+                return value[:500]
+    return ""
 
-    job_links = []
-    page_links = []
-    seen_jobs = set()
-    seen_pages = set()
+
+def page_title(soup: BeautifulSoup) -> str:
+    h1 = soup.find("h1")
+    if h1:
+        return h1.get_text(" ", strip=True)
+    if soup.title:
+        return soup.title.get_text(" ", strip=True)
+    return ""
+
+
+def extract_page_links(html: str, page_url: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = parse_jsonld(soup, page_url)
+    links: List[str] = []
+    seen: Set[str] = set()
 
     for a in soup.find_all("a", href=True):
-        href = str(a.get("href", "")).strip()
-        if not href:
-            continue
-
-        if href.lower().startswith(("mailto:", "tel:", "javascript:")):
-            continue
-
-        absolute = normalise_url(urljoin(page_url, href))
+        href = urljoin(page_url, a.get("href", ""))
         text = a.get_text(" ", strip=True)
-
-        if not absolute.startswith(("http://", "https://")):
+        if not href.startswith(("http://", "https://")):
             continue
-
-        if looks_like_job_url(absolute, text):
-            key = canonical_url(absolute)
-            if key and key not in seen_jobs:
-                seen_jobs.add(key)
-                job_links.append(absolute)
-
-        elif looks_like_pagination(absolute, text):
-            key = canonical_url(absolute)
-            if key and key not in seen_pages:
-                seen_pages.add(key)
-                page_links.append(absolute)
-
-    # Also inspect iframes: many ATS systems embed their job portal this way.
-    for iframe in soup.find_all("iframe", src=True):
-        iframe_url = normalise_url(urljoin(page_url, iframe["src"]))
-        if iframe_url.startswith(("http://", "https://")):
-            if is_ats(iframe_url) or looks_like_job_url(iframe_url):
-                if iframe_url not in page_links:
-                    page_links.append(iframe_url)
-
-    return job_links, page_links
+        href = normalise_url(href)
+        if href in seen:
+            continue
+        if looks_like_job_link(href, text):
+            seen.add(href)
+            links.append(href)
+    return jobs, links
 
 
-# ============================================================================
-# ATS / EMBEDDED PORTAL DISCOVERY
-# ============================================================================
+# =============================================================================
+# SITEMAPS
+# =============================================================================
 
-def discover_ats_urls(html_text: str, base_url: str) -> Set[str]:
+def discover_sitemaps(session: requests.Session, seed: str) -> List[str]:
+    root = f"{urlparse(seed).scheme}://{host(seed)}"
+    urls = [
+        urljoin(root, "/robots.txt"),
+        urljoin(root, "/sitemap.xml"),
+        urljoin(root, "/sitemap_index.xml"),
+    ]
     found: Set[str] = set()
 
-    soup = BeautifulSoup(html_text, "html.parser")
-
-    candidates = []
-
-    for a in soup.find_all("a", href=True):
-        candidates.append(urljoin(base_url, a["href"]))
-
-    for iframe in soup.find_all("iframe", src=True):
-        candidates.append(urljoin(base_url, iframe["src"]))
-
-    # Search raw source too because ATS URLs are frequently inside JavaScript.
-    candidates.extend(
-        re.findall(
-            r'https?://[^"\'<>\s]+',
-            html_text,
-            flags=re.I,
-        )
-    )
-
-    for candidate in candidates:
-        candidate = html.unescape(candidate).replace("\\/", "/")
-        candidate = candidate.rstrip("')]}>,.;")
-
-        if is_ats(candidate):
+    for candidate in urls:
+        r = fetch(session, candidate, timeout=12)
+        if not r:
+            continue
+        text = r.text
+        if candidate.endswith("robots.txt"):
+            for line in text.splitlines():
+                if line.lower().startswith("sitemap:"):
+                    found.add(line.split(":", 1)[1].strip())
+        else:
             found.add(candidate)
 
-    return found
+    return list(found)
 
 
-# ============================================================================
-# SITEMAPS
-# ============================================================================
+def parse_sitemap(session: requests.Session, sitemap_url: str, limit: int = MAX_SITEMAP_URLS_PER_COMPANY) -> List[str]:
+    out: List[str] = []
+    queue = [sitemap_url]
+    seen: Set[str] = set()
 
-def discover_sitemaps(session: requests.Session, base_url: str) -> Set[str]:
-    found = set()
-
-    parsed = urlparse(base_url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-
-    robots_url = origin + "/robots.txt"
-
-    response = fetch(session, robots_url, timeout=10)
-
-    if response:
-        for line in response.text.splitlines():
-            if line.lower().startswith("sitemap:"):
-                value = line.split(":", 1)[1].strip()
-                if value.startswith("http"):
-                    found.add(value)
-
-    # Always try conventional sitemap names.
-    found.add(origin + "/sitemap.xml")
-    found.add(origin + "/sitemap_index.xml")
-
-    return found
-
-
-def extract_sitemap_urls(session: requests.Session, sitemap_url: str) -> Set[str]:
-    found = set()
-    response = fetch(session, sitemap_url, timeout=12)
-
-    if not response:
-        return found
-
-    content = response.text
-
-    # Works for sitemap XML without needing another XML package.
-    for match in re.findall(r"<loc>\s*(.*?)\s*</loc>", content, flags=re.I | re.S):
-        value = html.unescape(match.strip())
-        if value.startswith("http"):
-            found.add(value)
-
-    return found
+    while queue and len(out) < limit:
+        current = queue.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        r = fetch(session, current, timeout=15)
+        if not r:
+            continue
+        text = r.text
+        soup = BeautifulSoup(text, "xml")
+        if soup.find("sitemap"):
+            for loc in soup.find_all("loc"):
+                if loc.get_text(strip=True):
+                    queue.append(loc.get_text(strip=True))
+        else:
+            for loc in soup.find_all("loc"):
+                u = loc.get_text(strip=True)
+                if u:
+                    out.append(u)
+                    if len(out) >= limit:
+                        break
+    return out
 
 
-# ============================================================================
-# PLAYWRIGHT
-# ============================================================================
+# =============================================================================
+# SEARCH ENGINE DISCOVERY
+# =============================================================================
 
-def render(url: str) -> Optional[Page]:
-    if not USE_PLAYWRIGHT or not PLAYWRIGHT_AVAILABLE:
+def search_google(session: requests.Session, query: str) -> List[str]:
+    url = "https://www.google.com/search?q=" + quote_plus(query) + "&num=20&hl=en-GB"
+    r = fetch(session, url, timeout=15)
+    if not r:
+        return []
+    soup = BeautifulSoup(r.text, "html.parser")
+    urls = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if href.startswith("/url?q="):
+            href = parse_qs(urlparse(href).query).get("q", [""])[0]
+        elif href.startswith("https://www.google.com/"):
+            continue
+        if href.startswith(("http://", "https://")):
+            urls.append(href)
+    return urls
+
+
+def search_bing(session: requests.Session, query: str) -> List[str]:
+    url = "https://www.bing.com/search?q=" + quote_plus(query) + "&count=20&setlang=en-GB"
+    r = fetch(session, url, timeout=15)
+    if not r:
+        return []
+    soup = BeautifulSoup(r.text, "html.parser")
+    urls = []
+    for a in soup.select("li.b_algo h2 a, h2 a"):
+        href = a.get("href", "")
+        if href.startswith(("http://", "https://")):
+            urls.append(href)
+    return urls
+
+
+def search_urls(session: requests.Session, query: str) -> List[str]:
+    urls: List[str] = []
+    for engine in SEARCH_ENGINES:
+        try:
+            if engine == "google":
+                urls.extend(search_google(session, query))
+            elif engine == "bing":
+                urls.extend(search_bing(session, query))
+        except Exception:
+            continue
+    # Preserve order, remove duplicates.
+    return list(dict.fromkeys(urls))
+
+
+def build_search_queries(company: Dict[str, Any]) -> List[str]:
+    domain = company["domains"][0]
+    terms = [
+        '"Identity and Access Management"',
+        '"IAM Engineer"',
+        '"Identity Engineer"',
+        '"Identity Security"',
+        '"PAM" CyberArk',
+        '"Privileged Access Management"',
+        '"Entra ID"',
+        '"SailPoint" OR "Saviynt" OR "Okta"',
+    ]
+    return [f"site:{domain} {term} UK jobs" for term in terms[:MAX_SEARCH_QUERIES_PER_COMPANY]]
+
+
+# =============================================================================
+# PLAYWRIGHT RENDERING
+# =============================================================================
+
+def render_page(url: str) -> Optional[Tuple[str, str]]:
+    if not USE_PLAYWRIGHT_FALLBACK or not PLAYWRIGHT_AVAILABLE:
         return None
-
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                locale="en-GB",
-                user_agent=USER_AGENT,
-                viewport={"width": 1440, "height": 1000},
-            )
-            page = context.new_page()
-
-            page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=35000,
-            )
-
-            # Allow ATS JavaScript to build its results.
-            page.wait_for_timeout(3000)
-
-            # Scroll so lazy-loaded jobs can appear.
-            for _ in range(3):
-                page.mouse.wheel(0, 2500)
-                page.wait_for_timeout(700)
-
-            html_text = page.content()
+            page = browser.new_page(locale="en-GB", user_agent=USER_AGENT)
+            page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
+            page.wait_for_timeout(1500)
+            html = page.content()
             final_url = page.url
-
             browser.close()
-
-            return Page(
-                url=url,
-                html=html_text,
-                final_url=final_url,
-                source="Playwright",
-            )
-
+            return html, final_url
     except Exception:
         return None
 
 
-# ============================================================================
-# SEARCH ENGINE DISCOVERY
-# ============================================================================
+# =============================================================================
+# JOB RECORD NORMALISATION
+# =============================================================================
 
-def search_query_urls(session: requests.Session, query: str) -> List[str]:
-    """
-    Search-engine discovery is deliberately best-effort.
+def canonical_url(url: str) -> str:
+    if not url:
+        return ""
+    p = urlparse(url)
+    # Remove query/fragment so tracking and filter parameters do not create
+    # duplicate records.
+    return urlunparse((
+        p.scheme.lower(),
+        p.netloc.lower(),
+        p.path.rstrip("/"),
+        "",
+        "",
+        "",
+    ))
 
-    We do not trust search snippets as job data. We only use returned URLs to
-    locate a real company/ATS page, which is then fetched and evaluated.
-    """
 
-    urls: List[str] = []
+def extract_reference(url: str, text: str = "") -> str:
+    patterns = [
+        r"\bReq(?:uisition)?(?:\s*(?:ID|No|Number|#))?\s*[:\-]?\s*([A-Z0-9\-]{4,})\b",
+        r"\bJob\s*(?:ID|Ref(?:erence)?)\s*[:\-]?\s*([A-Z0-9\-]{4,})\b",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            return m.group(1)
+    return ""
 
-    # Bing HTML is relatively straightforward to parse.
-    try:
-        params = {"q": query, "count": MAX_SEARCH_RESULTS_PER_QUERY}
-        response = session.get(
-            "https://www.bing.com/search",
-            params=params,
-            timeout=SEARCH_TIMEOUT,
-            headers=HEADERS,
-        )
 
-        if response.ok:
-            soup = BeautifulSoup(response.text, "html.parser")
+def parse_posted_date(text: str) -> str:
+    patterns = [
+        r"(?:posted|posting date|date posted)\s*[:\-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        r"(?:posted|posting date|date posted)\s*[:\-]?\s*([A-Z][a-z]+\s+\d{1,2},\s+\d{4})",
+        r"(\d{4}-\d{2}-\d{2})",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            return m.group(1)
+    return ""
 
-            for a in soup.select("li.b_algo h2 a"):
-                href = a.get("href")
-                if href and href.startswith("http"):
-                    urls.append(href)
 
-    except requests.RequestException:
-        pass
-
-    # Google fallback. Google markup changes frequently, so this is optional.
-    if len(urls) < 5:
+def passes_posted_filter(date_text: str) -> bool:
+    if POSTED_WITHIN_DAYS is None or not date_text:
+        return True
+    # Conservative: if a date exists but cannot be parsed, retain it.
+    from datetime import datetime, timedelta
+    formats = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%B %d, %Y"]
+    parsed = None
+    for fmt in formats:
         try:
-            params = {"q": query, "num": MAX_SEARCH_RESULTS_PER_QUERY}
-            response = session.get(
-                "https://www.google.com/search",
-                params=params,
-                timeout=SEARCH_TIMEOUT,
-                headers=HEADERS,
-            )
-
-            if response.ok:
-                soup = BeautifulSoup(response.text, "html.parser")
-
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
-
-                    if href.startswith("/url?q="):
-                        href = href.split("/url?q=", 1)[1].split("&", 1)[0]
-
-                    if href.startswith("http"):
-                        urls.append(href)
-
-        except requests.RequestException:
+            parsed = datetime.strptime(date_text, fmt)
+            break
+        except ValueError:
             pass
-
-    # Deduplicate while retaining order.
-    output = []
-    seen = set()
-
-    for url in urls:
-        key = canonical_url(url)
-        if key and key not in seen:
-            seen.add(key)
-            output.append(url)
-
-    return output[:MAX_SEARCH_RESULTS_PER_QUERY]
+    if not parsed:
+        return True
+    cutoff = datetime.now() - timedelta(days=POSTED_WITHIN_DAYS)
+    return parsed >= cutoff
 
 
-# ============================================================================
-# JOB RECORD
-# ============================================================================
-
-def make_job(
-    company: str,
+def build_result(
+    company: Dict[str, Any],
     title: str,
     description: str,
     location: str,
     url: str,
     method: str,
-    employment_type: str = "",
     date_posted: str = "",
-    valid_through: str = "",
+    employment_type: str = "",
+    salary: str = "",
 ) -> Optional[Dict[str, Any]]:
-
-    title = decode_entities(title).strip()
-    description = decode_entities(description).strip()
-    location = decode_entities(location).strip()
+    title = re.sub(r"\s+", " ", title or "").strip()
+    description = re.sub(r"\s+", " ", description or "").strip()
     url = normalise_url(url)
 
     if not title or not url:
         return None
 
-    score, hits, contract_hits = score_job(
-        title,
-        description,
-        location,
-        url,
-    )
-
-    if score < 35:
+    matched, keywords = is_target_job(title, f"{description} {location}", url)
+    if not matched:
+        return None
+    if not allowed_result_url(url, company):
+        return None
+    if not passes_posted_filter(date_posted):
         return None
 
-    if not is_uk(location, description, url):
-        return None
-
-    if not is_permanent(title, description):
-        return None
-
-    # A title-only weak match is not enough. Require either:
-    # - strong identity title, or
-    # - at least two body identity/PAM/platform signals.
-    title_hits = matched_terms(title.lower(), TITLE_STRONG)
-    body_hits = (
-        matched_terms(description, IDENTITY_TERMS)
-        + matched_terms(description, PAM_TERMS)
-        + matched_terms(description, MICROSOFT_TERMS)
-        + matched_terms(description, PLATFORM_TERMS)
-    )
-
-    if not title_hits and len(body_hits) < 2:
-        return None
-
-    platform = ats_platform(url) or "Corporate"
+    arrangement = extract_working_arrangement(f"{title} {description} {location}")
+    employment = employment_type or extract_employment_type(f"{title} {description}")
 
     return {
-        "company": company,
+        "company": company["name"],
         "title": title,
-        "location": location or "UK",
-        "employment_type": employment_type,
+        "location": location or "UK location not specified",
+        "working_arrangement": arrangement,
+        "employment_type": employment,
+        "salary": salary,
         "date_posted": date_posted,
-        "valid_through": valid_through,
-        "score": score,
-        "matched_keywords": ", ".join(dict.fromkeys(hits)),
-        "platform": platform,
-        "discovery_method": method,
+        "job_reference": extract_reference(url, f"{title} {description}"),
+        "source_method": method,
+        "matched_keywords": ", ".join(keywords),
         "url": url,
         "canonical_url": canonical_url(url),
         "discovered_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
-# ============================================================================
-# SOURCE CRAWLER
-# ============================================================================
+# =============================================================================
+# COMPANY CRAWLER
+# =============================================================================
 
-def crawl_company(company: str, careers_url: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def crawl_company(company: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     session = make_session()
-
+    results: List[Dict[str, Any]] = []
     audit = {
-        "company": company,
-        "seed_url": careers_url,
-        "status": "FAILED",
-        "final_url": "",
-        "ats_found": 0,
+        "company": company["name"],
+        "verified_seeds": [],
+        "failed_seeds": [],
         "pages_scanned": 0,
-        "job_links_found": 0,
-        "search_urls_found": 0,
-        "sitemap_urls_found": 0,
-        "matches": 0,
-        "error": "",
+        "job_links_scanned": 0,
+        "sitemap_urls": 0,
+        "search_urls": 0,
+        "errors": [],
     }
 
-    results: List[Dict[str, Any]] = []
-    seen_pages: Set[str] = set()
-    job_links: Set[str] = set()
-    queue: List[str] = [careers_url]
-
-    # ------------------------------------------------------------------------
-    # Seed
-    # ------------------------------------------------------------------------
-    response = fetch(session, careers_url)
-
-    if response:
-        seed_page = Page(
-            careers_url,
-            response.text,
-            response.url,
-            "Requests",
-        )
-        audit["status"] = "VERIFIED"
-        audit["final_url"] = response.url
-        queue.append(response.url)
-    else:
-        seed_page = render(careers_url)
-        if seed_page:
-            audit["status"] = "VERIFIED"
-            audit["final_url"] = seed_page.final_url
-            queue.append(seed_page.final_url)
+    # 1. Verify seeds.
+    seeds: List[str] = []
+    for seed in company["seeds"]:
+        r = fetch(session, seed)
+        if r:
+            final = r.url
+            seeds.append(final)
+            audit["verified_seeds"].append(final)
         else:
-            audit["error"] = "Seed page unavailable"
-            return [], audit
+            audit["failed_seeds"].append(seed)
 
-    # ------------------------------------------------------------------------
-    # Search-engine discovery
-    # ------------------------------------------------------------------------
+    if not seeds:
+        return [], audit
+
+    # 2. Sitemap discovery.
+    sitemap_urls: Set[str] = set()
+    for seed in seeds[:3]:
+        for sm in discover_sitemaps(session, seed):
+            sitemap_urls.add(sm)
+
+    sitemap_job_candidates: List[str] = []
+    for sm in list(sitemap_urls)[:5]:
+        sitemap_job_candidates.extend(parse_sitemap(session, sm))
+        if len(sitemap_job_candidates) >= MAX_SITEMAP_URLS_PER_COMPANY:
+            break
+
+    audit["sitemap_urls"] = len(sitemap_job_candidates)
+
+    # We do not fetch every sitemap URL. Only URLs whose path/title looks job-like.
+    sitemap_candidates = [
+        u for u in sitemap_job_candidates
+        if looks_like_job_link(u)
+    ][:MAX_JOB_LINKS_PER_COMPANY]
+
+    # 3. Search engine discovery.
+    search_candidates: List[str] = []
     if USE_SEARCH_DISCOVERY:
-        search_urls = []
+        for q in build_search_queries(company):
+            found = search_urls(session, q)
+            for u in found:
+                if allowed_result_url(u, company):
+                    search_candidates.append(u)
+            if len(search_candidates) >= MAX_JOB_LINKS_PER_COMPANY:
+                break
+        search_candidates = list(dict.fromkeys(search_candidates))
+        audit["search_urls"] = len(search_candidates)
 
-        for template in SEARCH_TEMPLATES[:MAX_SEARCH_QUERIES_PER_COMPANY]:
-            query = template.format(company=company)
-            found = search_query_urls(session, query)
-            search_urls.extend(found)
+    # 4. Deep crawl of careers pages.
+    pages: List[str] = list(dict.fromkeys(seeds))
+    pages.extend(sitemap_candidates[:80])
+    pages.extend(search_candidates[:80])
 
-        for url in search_urls:
-            parsed_host = host(url)
+    visited_pages: Set[str] = set()
+    job_links: List[str] = []
+    seen_job_links: Set[str] = set()
 
-            # Keep only official company host or recognised ATS host.
-            if parsed_host == host(careers_url) or is_ats(url):
-                if url not in queue:
-                    queue.append(url)
-
-        audit["search_urls_found"] = len(search_urls)
-
-    # ------------------------------------------------------------------------
-    # Sitemap discovery
-    # ------------------------------------------------------------------------
-    sitemap_urls = discover_sitemaps(session, careers_url)
-
-    sitemap_job_urls = set()
-
-    for sitemap in list(sitemap_urls)[:5]:
-        for item in extract_sitemap_urls(session, sitemap):
-            if looks_like_job_url(item):
-                sitemap_job_urls.add(item)
-
-    audit["sitemap_urls_found"] = len(sitemap_job_urls)
-
-    for url in list(sitemap_job_urls)[:MAX_JOB_LINKS_PER_SOURCE]:
-        job_links.add(url)
-
-    # ------------------------------------------------------------------------
-    # Deep page crawl
-    # ------------------------------------------------------------------------
-    while queue and audit["pages_scanned"] < MAX_PAGES_PER_SOURCE:
-        page_url = queue.pop(0)
-        key = canonical_url(page_url)
-
-        if not key or key in seen_pages:
+    while pages and len(visited_pages) < MAX_PAGES_PER_COMPANY:
+        page_url = normalise_url(pages.pop(0))
+        if not page_url or page_url in visited_pages:
+            continue
+        if not same_domain_or_subdomain(page_url, company["domains"]) and not detect_ats(page_url):
             continue
 
-        seen_pages.add(key)
-
-        page = None
+        visited_pages.add(page_url)
 
         response = fetch(session, page_url)
+        html = None
+        final_url = page_url
 
-        if response:
-            page = Page(
-                page_url,
-                response.text,
-                response.url,
-                "Requests",
-            )
-
-            # If static HTML looks empty, render it.
-            if len(soup_text(response.text)) < 900:
-                rendered = render(response.url)
+        if response and is_html_response(response):
+            html = response.text
+            final_url = response.url
+            static_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+            if USE_PLAYWRIGHT_FALLBACK and len(static_text) < 900:
+                rendered = render_page(final_url)
                 if rendered:
-                    page = rendered
-
+                    html, final_url = rendered
         else:
-            page = render(page_url)
+            rendered = render_page(page_url)
+            if rendered:
+                html, final_url = rendered
 
-        if not page:
+        if not html:
             continue
 
         audit["pages_scanned"] += 1
 
-        # Discover embedded ATS portals.
-        ats_urls = discover_ats_urls(page.html, page.final_url)
-        audit["ats_found"] += len(ats_urls)
+        soup = BeautifulSoup(html, "html.parser")
+        page_text = soup.get_text(" ", strip=True)
 
-        for ats_url in ats_urls:
-            if ats_url not in seen_pages and len(queue) < MAX_PAGES_PER_SOURCE * 2:
-                queue.append(ats_url)
-
-        # Structured jobs directly on the page.
-        for job in extract_json_jobs(page.html, page.final_url):
-            record = make_job(
-                company=company,
-                title=job["title"],
-                description=job["description"],
-                location=job["location"],
-                url=job["url"],
-                method=f"{page.source} -> JSON-LD",
-                employment_type=job.get("employment_type", ""),
-                date_posted=job.get("date_posted", ""),
-                valid_through=job.get("valid_through", ""),
+        # JSON-LD jobs.
+        for job in parse_jsonld(soup, final_url):
+            item = build_result(
+                company,
+                job.get("title", ""),
+                job.get("description", ""),
+                job.get("location", ""),
+                job.get("url", final_url),
+                f"Official/ATS -> {detect_ats(final_url) or 'Corporate'} -> JSON-LD",
+                job.get("date_posted", ""),
+                job.get("employment_type", ""),
+                job.get("salary", ""),
             )
-            if record:
-                results.append(record)
+            if item:
+                results.append(item)
 
-        links, page_links = extract_links(
-            page.html,
-            page.final_url,
-        )
+        # All links. We intentionally collect a much larger set than v1.
+        for a in soup.find_all("a", href=True):
+            href = urljoin(final_url, a.get("href", ""))
+            text = a.get_text(" ", strip=True)
+            if not href.startswith(("http://", "https://")):
+                continue
+            href = normalise_url(href)
 
-        for link in links:
-            if len(job_links) >= MAX_JOB_LINKS_PER_SOURCE:
-                break
-            job_links.add(link)
+            if not allowed_result_url(href, company):
+                continue
 
-        # Follow same company domain, ATS domains, and obvious careers pages.
-        base_root = root_domain(page.final_url)
+            if looks_like_job_link(href, text):
+                if href not in seen_job_links and len(job_links) < MAX_JOB_LINKS_PER_COMPANY:
+                    seen_job_links.add(href)
+                    job_links.append(href)
+            elif looks_like_navigation(href, text):
+                if href not in visited_pages and len(pages) < MAX_PAGES_PER_COMPANY * 3:
+                    pages.append(href)
 
-        for link in page_links + links:
-            if len(queue) >= MAX_PAGES_PER_SOURCE * 2:
-                break
+    # 5. Fetch individual job links.
+    for job_url in job_links[:MAX_JOB_LINKS_PER_COMPANY]:
+        audit["job_links_scanned"] += 1
+        try:
+            response = fetch(session, job_url, timeout=JOB_REQUEST_TIMEOUT)
+            html = None
+            final_url = job_url
 
-            link_host = host(link)
-
-            allowed = (
-                link_host == host(careers_url)
-                or link_host.endswith("." + host(careers_url))
-                or root_domain(link) == base_root
-                or is_ats(link)
-            )
-
-            if allowed and (
-                looks_like_job_url(link)
-                or looks_like_pagination(link)
-                or "career" in link.lower()
-                or "job" in link.lower()
-            ):
-                if canonical_url(link) not in seen_pages:
-                    queue.append(link)
-
-    audit["job_links_found"] = len(job_links)
-
-    # ------------------------------------------------------------------------
-    # Fetch individual jobs
-    # ------------------------------------------------------------------------
-    for job_url in list(job_links)[:MAX_JOB_LINKS_PER_SOURCE]:
-        page = None
-
-        response = fetch(
-            session,
-            job_url,
-            timeout=JOB_REQUEST_TIMEOUT,
-        )
-
-        if response:
-            page = Page(
-                job_url,
-                response.text,
-                response.url,
-                "Requests",
-            )
-
-            if len(soup_text(response.text)) < 900:
-                rendered = render(response.url)
+            if response and is_html_response(response):
+                html = response.text
+                final_url = response.url
+                static_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+                if USE_PLAYWRIGHT_FALLBACK and len(static_text) < 900:
+                    rendered = render_page(final_url)
+                    if rendered:
+                        html, final_url = rendered
+            else:
+                rendered = render_page(job_url)
                 if rendered:
-                    page = rendered
-        else:
-            page = render(job_url)
+                    html, final_url = rendered
 
-        if not page:
-            continue
+            if not html:
+                continue
 
-        jobs = extract_json_jobs(
-            page.html,
-            page.final_url,
+            soup = BeautifulSoup(html, "html.parser")
+
+            json_jobs = parse_jsonld(soup, final_url)
+            if json_jobs:
+                for job in json_jobs:
+                    item = build_result(
+                        company,
+                        job.get("title", ""),
+                        job.get("description", ""),
+                        job.get("location", ""),
+                        job.get("url", final_url),
+                        f"Official/ATS -> {detect_ats(final_url) or 'Corporate'} -> JobPosting",
+                        job.get("date_posted", ""),
+                        job.get("employment_type", ""),
+                        job.get("salary", ""),
+                    )
+                    if item:
+                        results.append(item)
+                continue
+
+            title = page_title(soup)
+            text = soup.get_text(" ", strip=True)
+            location = extract_location_from_html(soup)
+            date_posted = parse_posted_date(text)
+            item = build_result(
+                company,
+                title,
+                text,
+                location,
+                final_url,
+                f"Official/ATS -> {detect_ats(final_url) or 'Corporate'} -> HTML",
+                date_posted,
+            )
+            if item:
+                results.append(item)
+
+        except Exception as exc:
+            audit["errors"].append(str(exc)[:250])
+
+    return dedupe(results), audit
+
+
+# =============================================================================
+# ATS API SCANNERS
+# =============================================================================
+
+def scan_greenhouse(company: str, board: str) -> List[Dict[str, Any]]:
+    out = []
+    try:
+        r = requests.get(
+            f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true",
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
         )
+        if r.status_code != 200:
+            return []
+        for job in r.json().get("jobs", []):
+            title = str(job.get("title", ""))
+            desc = BeautifulSoup(str(job.get("content", "")), "html.parser").get_text(" ", strip=True)
+            loc = str((job.get("location") or {}).get("name", ""))
+            url = str(job.get("absolute_url", ""))
+            fake_company = {"name": company, "domains": [registrableish_host(url)]}
+            item = build_result(fake_company, title, desc, loc, url, "Direct API (Greenhouse)")
+            if item:
+                out.append(item)
+    except Exception:
+        pass
+    return out
 
-        if jobs:
-            for job in jobs:
-                record = make_job(
-                    company=company,
-                    title=job["title"],
-                    description=job["description"],
-                    location=job["location"],
-                    url=job["url"] or page.final_url,
-                    method=f"{page.source} -> JobPosting",
-                    employment_type=job.get("employment_type", ""),
-                    date_posted=job.get("date_posted", ""),
-                    valid_through=job.get("valid_through", ""),
-                )
-                if record:
-                    results.append(record)
 
-            continue
-
-        # Generic job page.
-        soup = BeautifulSoup(page.html, "html.parser")
-
-        h1 = soup.find("h1")
-        title = h1.get_text(" ", strip=True) if h1 else ""
-
-        if not title and soup.title:
-            title = soup.title.get_text(" ", strip=True)
-
-        description = soup_text(page.html)
-
-        location = ""
-
-        for selector in [
-            '[data-testid*="location"]',
-            '[class*="location"]',
-            '[id*="location"]',
-            '[class*="Location"]',
-            '[data-automation-id*="location"]',
-        ]:
-            node = soup.select_one(selector)
-            if node:
-                location = node.get_text(" ", strip=True)
-                if location:
-                    break
-
-        record = make_job(
-            company=company,
-            title=title,
-            description=description,
-            location=location,
-            url=page.final_url,
-            method=f"{page.source} -> Generic job page",
+def scan_lever(company: str, board: str) -> List[Dict[str, Any]]:
+    out = []
+    try:
+        r = requests.get(
+            f"https://api.lever.co/v0/postings/{board}?mode=json",
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
         )
+        if r.status_code != 200:
+            return []
+        for job in r.json():
+            title = str(job.get("text", ""))
+            cat = job.get("categories") or {}
+            loc = str(cat.get("location", ""))
+            desc = str(job.get("descriptionPlain", ""))
+            url = str(job.get("hostedUrl", ""))
+            fake_company = {"name": company, "domains": [registrableish_host(url)]}
+            item = build_result(fake_company, title, desc, loc, url, "Direct API (Lever)")
+            if item:
+                out.append(item)
+    except Exception:
+        pass
+    return out
 
-        if record:
-            results.append(record)
 
-    audit["matches"] = len(results)
+def scan_workable(company: str, board: str) -> List[Dict[str, Any]]:
+    out = []
+    try:
+        r = requests.get(
+            f"https://apply.workable.com/api/v3/accounts/{board}",
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        for job in data.get("jobs", []):
+            title = str(job.get("title", ""))
+            loc = ", ".join(
+                str(job.get(k, ""))
+                for k in ("city", "state", "country")
+                if job.get(k)
+            )
+            desc = str(job.get("description", ""))
+            url = str(job.get("url", ""))
+            fake_company = {"name": company, "domains": [registrableish_host(url)]}
+            item = build_result(fake_company, title, desc, loc, url, "Direct API (Workable)")
+            if item:
+                out.append(item)
+    except Exception:
+        pass
+    return out
 
-    return results, audit
+
+def scan_ats_board(item: Tuple[str, str, str]) -> List[Dict[str, Any]]:
+    company, platform, board = item
+    if platform == "greenhouse":
+        return scan_greenhouse(company, board)
+    if platform == "lever":
+        return scan_lever(company, board)
+    if platform == "workable":
+        return scan_workable(company, board)
+    return []
 
 
-# ============================================================================
+# =============================================================================
 # DEDUPLICATION
-# ============================================================================
+# =============================================================================
 
-def deduplicate(results: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    output = []
-    seen_urls = set()
-    seen_fuzzy = set()
-
+def dedupe(results: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    seen: Set[str] = set()
     for item in results:
-        url_key = canonical_url(item.get("url", ""))
-
-        company = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            item.get("company", "").lower(),
-        ).strip()
-
-        title = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            item.get("title", "").lower(),
-        ).strip()
-
-        fuzzy_key = f"{company}|{title}"
-
-        if url_key and url_key in seen_urls:
+        key = item.get("canonical_url") or canonical_url(item.get("url", ""))
+        if not key:
+            key = f"{item.get('company','')}|{item.get('title','')}".lower()
+        if key in seen:
             continue
-
-        if fuzzy_key in seen_fuzzy:
-            continue
-
-        if url_key:
-            seen_urls.add(url_key)
-
-        seen_fuzzy.add(fuzzy_key)
-        output.append(item)
-
-    return output
+        seen.add(key)
+        out.append(item)
+    return out
 
 
-# ============================================================================
+# =============================================================================
 # GOOGLE APPS SCRIPT
-# ============================================================================
+# =============================================================================
 
-def archive_to_google(item: Dict[str, Any]) -> bool:
-    if not ARCHIVE_TO_GOOGLE:
-        return False
-
-    if not GOOGLE_APPS_SCRIPT_URL or not GOOGLE_APPS_SCRIPT_TOKEN:
-        return False
-
+def send_to_apps_script(job: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
-        "token": GOOGLE_APPS_SCRIPT_TOKEN,
+        "token": APPS_SCRIPT_TOKEN,
         "application_id": "",
         "date_applied": "",
-        "company": item.get("company", ""),
-        "title": item.get("title", ""),
-        "job_reference": "",
-        "url": item.get("url", ""),
-        "source": item.get("discovery_method", ""),
-        "salary": "",
-        "location": item.get("location", ""),
-        "working_arrangement": "",
-        "employment_type": item.get("employment_type", ""),
+        "company": job.get("company", ""),
+        "title": job.get("title", ""),
+        "job_reference": job.get("job_reference", ""),
+        "url": job.get("url", ""),
+        "source": job.get("source_method", ""),
+        "salary": job.get("salary", ""),
+        "employment_type": job.get("employment_type", ""),
+        "location": job.get("location", ""),
+        "working_arrangement": job.get("working_arrangement", ""),
         "status": "Discovered",
-        "matched_keywords": item.get("matched_keywords", ""),
-        "match_score": item.get("score", ""),
-        "notes": "Discovered by UK IAM Job Hunter v2",
+        "cv_used": "",
+        "matched_keywords": job.get("matched_keywords", ""),
+        "match_score": "",
+        "outcome": "",
+        "notes": "Automatically discovered by UK IAM Job Engine v2",
     }
-
     try:
-        response = requests.post(
-            GOOGLE_APPS_SCRIPT_URL,
-            json=payload,
-            timeout=20,
-        )
-        return response.ok
-    except requests.RequestException:
-        return False
+        r = requests.post(APPS_SCRIPT_WEBHOOK, json=payload, timeout=30)
+        return r.json()
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
-# ============================================================================
-# CSV
-# ============================================================================
+# =============================================================================
+# EXPORT
+# =============================================================================
 
-def write_csv(filename: str, rows: List[Dict[str, Any]], fields: List[str]) -> None:
-    with open(
-        filename,
-        "w",
-        newline="",
-        encoding="utf-8-sig",
-    ) as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=fields,
-            extrasaction="ignore",
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def write_audit(audits: List[Dict[str, Any]]) -> None:
+def export_csv(results: List[Dict[str, Any]]) -> None:
+    if not WRITE_CSV:
+        return
     fields = [
-        "company",
-        "seed_url",
-        "status",
-        "final_url",
-        "ats_found",
-        "pages_scanned",
-        "job_links_found",
-        "search_urls_found",
-        "sitemap_urls_found",
-        "matches",
-        "error",
+        "company", "title", "job_reference", "location",
+        "working_arrangement", "employment_type", "salary",
+        "date_posted", "matched_keywords", "source_method", "url",
+        "canonical_url", "discovered_at",
     ]
-    write_csv(AUDIT_CSV, audits, fields)
-
-
-def write_run_log(results: List[Dict[str, Any]], audits: List[Dict[str, Any]]) -> None:
-    row = {
-        "run_time_utc": datetime.now(timezone.utc).isoformat(),
-        "companies": len(COMPANY_CAREERS),
-        "verified_sources": sum(a["status"] == "VERIFIED" for a in audits),
-        "results": len(results),
-        "search_discovery": USE_SEARCH_DISCOVERY,
-        "playwright": USE_PLAYWRIGHT and PLAYWRIGHT_AVAILABLE,
-        "google_archive": ARCHIVE_TO_GOOGLE,
-    }
-
-    exists = False
-    try:
-        with open(RUN_LOG_CSV, "r", encoding="utf-8-sig"):
-            exists = True
-    except OSError:
-        pass
-
-    with open(
-        RUN_LOG_CSV,
-        "a",
-        newline="",
-        encoding="utf-8-sig",
-    ) as f:
-        fields = list(row.keys())
+    with open(CSV_FILENAME, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
-        if not exists:
-            writer.writeheader()
-        writer.writerow(row)
+        writer.writeheader()
+        for row in results:
+            writer.writerow({k: row.get(k, "") for k in fields})
+    console.print(f"[green]✔ CSV saved: {CSV_FILENAME}[/green]")
 
 
-# ============================================================================
+def export_json(results: List[Dict[str, Any]], audits: List[Dict[str, Any]]) -> None:
+    if not WRITE_JSON:
+        return
+    payload = {
+        "scan_time": datetime.now(timezone.utc).isoformat(),
+        "result_count": len(results),
+        "results": results,
+        "source_audit": audits,
+    }
+    with open(JSON_FILENAME, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    console.print(f"[green]✔ JSON saved: {JSON_FILENAME}[/green]")
+
+
+# =============================================================================
 # DISPLAY
-# ============================================================================
+# =============================================================================
 
 def display_results(results: List[Dict[str, Any]]) -> None:
     if not results:
-        console.print(
-            "\n[yellow]No qualifying UK IAM/PAM vacancies found.[/yellow]"
-        )
+        console.print("[yellow]No matching UK IAM/PAM roles found.[/yellow]")
         return
 
-    table = Table(
-        title=f"UK IAM / PAM Jobs Found — {len(results)}"
-    )
-
-    table.add_column("Score", style="green", no_wrap=True)
+    table = Table(title=f"UK IAM / PAM Discovery Results ({len(results)})")
     table.add_column("Company", style="cyan", no_wrap=True)
-    table.add_column("Exact Role", style="magenta")
+    table.add_column("Role", style="magenta")
     table.add_column("Location", style="green")
-    table.add_column("Platform", style="yellow")
-    table.add_column("Matched Terms", style="white", max_width=45)
-    table.add_column("URL", style="blue", max_width=65)
+    table.add_column("Work", style="yellow")
+    table.add_column("Terms", style="white")
+    table.add_column("URL", style="blue", max_width=55)
 
-    for item in results:
+    for r in results:
         table.add_row(
-            str(item.get("score", "")),
-            item.get("company", ""),
-            item.get("title", ""),
-            item.get("location", ""),
-            item.get("platform", ""),
-            item.get("matched_keywords", ""),
-            item.get("url", ""),
+            r.get("company", ""),
+            r.get("title", ""),
+            r.get("location", ""),
+            r.get("working_arrangement", ""),
+            r.get("matched_keywords", ""),
+            r.get("url", ""),
         )
-
     console.print(table)
 
 
 def display_audit(audits: List[Dict[str, Any]]) -> None:
-    table = Table(title="Deep Source Audit")
+    table = Table(title="Source Audit")
+    table.add_column("Company", style="cyan")
+    table.add_column("Seeds", style="green")
+    table.add_column("Pages", style="yellow")
+    table.add_column("Job Links", style="magenta")
+    table.add_column("Sitemap", style="white")
+    table.add_column("Search", style="blue")
+    table.add_column("Failed", style="red")
 
-    table.add_column("Company", style="cyan", no_wrap=True)
-    table.add_column("Status", style="green")
-    table.add_column("Pages")
-    table.add_column("Job Links")
-    table.add_column("ATS")
-    table.add_column("Search URLs")
-    table.add_column("Sitemap Jobs")
-    table.add_column("Matches")
-
-    for a in audits:
-        status = (
-            "[green]VERIFIED[/green]"
-            if a["status"] == "VERIFIED"
-            else "[red]FAILED[/red]"
-        )
-
+    for a in sorted(audits, key=lambda x: x["company"].lower()):
         table.add_row(
             a["company"],
-            status,
+            str(len(a["verified_seeds"])),
             str(a["pages_scanned"]),
-            str(a["job_links_found"]),
-            str(a["ats_found"]),
-            str(a["search_urls_found"]),
-            str(a["sitemap_urls_found"]),
-            str(a["matches"]),
+            str(a["job_links_scanned"]),
+            str(a["sitemap_urls"]),
+            str(a["search_urls"]),
+            str(len(a["failed_seeds"])),
         )
-
     console.print(table)
 
 
-# ============================================================================
+# =============================================================================
 # MAIN
-# ============================================================================
+# =============================================================================
 
 def main() -> None:
-    started = time.time()
-
+    console.print("\n[bold cyan]🚀 UK IAM / PAM Job Discovery Engine v2[/bold cyan]")
     console.print(
-        "\n[bold cyan]"
-        "🚀 UK IAM / PAM JOB HUNTER v2"
-        "[/bold cyan]"
-    )
-
-    console.print(
-        f"Companies: {len(COMPANY_CAREERS)} | "
+        f"[cyan]Companies: {len(COMPANIES)} | "
+        f"ATS boards: {len(ATS_BOARDS)} | "
         f"Search discovery: {'ON' if USE_SEARCH_DISCOVERY else 'OFF'} | "
-        f"Playwright: "
-        f"{'ON' if USE_PLAYWRIGHT and PLAYWRIGHT_AVAILABLE else 'OFF'} | "
-        f"Google archive: {'ON' if ARCHIVE_TO_GOOGLE else 'OFF'}\n"
+        f"Playwright: {'ON' if USE_PLAYWRIGHT_FALLBACK else 'OFF'}[/cyan]\n"
     )
 
-    if USE_PLAYWRIGHT and not PLAYWRIGHT_AVAILABLE:
+    if USE_PLAYWRIGHT_FALLBACK and not PLAYWRIGHT_AVAILABLE:
         console.print(
-            "[yellow]"
-            "Playwright is not installed. Install with:\n"
-            "pip install playwright\n"
-            "playwright install chromium"
-            "[/yellow]\n"
+            "[yellow]Playwright not installed. The engine will still run, "
+            "but JS-heavy sites may return fewer jobs.[/yellow]\n"
         )
 
     all_results: List[Dict[str, Any]] = []
     audits: List[Dict[str, Any]] = []
 
-    # Threaded company scanning. Each worker owns its own requests session.
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(crawl_company, company, url): (company, url)
-            for company, url in COMPANY_CAREERS
-        }
-
-        completed = 0
-
+    # 1. ATS APIs
+    console.print("[bold]1/2[/bold] Scanning public ATS APIs...")
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = [ex.submit(scan_ats_board, b) for b in ATS_BOARDS]
         for future in as_completed(futures):
-            completed += 1
-            company, _ = futures[future]
+            try:
+                all_results.extend(future.result())
+            except Exception:
+                pass
+    console.print(f"   ATS matches: {len(all_results)}")
 
+    # 2. Company sources
+    console.print("\n[bold]2/2[/bold] Deep-scanning official careers sources + search discovery...")
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        future_map = {ex.submit(crawl_company, c): c for c in COMPANIES}
+        completed = 0
+        for future in as_completed(future_map):
+            completed += 1
+            company = future_map[future]
             try:
                 results, audit = future.result()
                 all_results.extend(results)
                 audits.append(audit)
-
                 console.print(
-                    f"[{completed:02d}/{len(COMPANY_CAREERS):02d}] "
-                    f"{company}: "
-                    f"[green]{len(results)} match(es)[/green] "
-                    f"| pages={audit['pages_scanned']} "
-                    f"| job-links={audit['job_links_found']}"
+                    f"   [{completed:02d}/{len(COMPANIES):02d}] "
+                    f"{company['name']}: {len(results)} match(es)"
                 )
-
             except Exception as exc:
-                audits.append({
-                    "company": company,
-                    "seed_url": "",
-                    "status": "FAILED",
-                    "final_url": "",
-                    "ats_found": 0,
-                    "pages_scanned": 0,
-                    "job_links_found": 0,
-                    "search_urls_found": 0,
-                    "sitemap_urls_found": 0,
-                    "matches": 0,
-                    "error": str(exc),
-                })
+                console.print(f"   [red]{company['name']}: {exc}[/red]")
 
-                console.print(
-                    f"[red]{company}: {exc}[/red]"
-                )
+    all_results = dedupe(all_results)
+    all_results.sort(key=lambda x: (x.get("company", "").lower(), x.get("title", "").lower()))
 
-    all_results = deduplicate(all_results)
+    # Optional webhook. Disabled by default.
+    if SEND_TO_APPS_SCRIPT and all_results:
+        console.print("\n[bold]Sending discovered jobs to Google Apps Script...[/bold]")
+        sent = 0
+        for job in all_results:
+            result = send_to_apps_script(job)
+            if result.get("success"):
+                sent += 1
+        console.print(f"[green]✔ Sent {sent}/{len(all_results)} jobs.[/green]")
 
-    # Highest relevance first.
-    all_results.sort(
-        key=lambda x: (
-            -int(x.get("score", 0)),
-            x.get("company", "").lower(),
-            x.get("title", "").lower(),
-        )
-    )
-
-    # Archive only after dedupe/relevance filtering.
-    archived = 0
-
-    if ARCHIVE_TO_GOOGLE and all_results:
-        console.print("\n[bold]Archiving results to Google Apps Script...[/bold]")
-
-        for item in all_results:
-            if archive_to_google(item):
-                archived += 1
-
-    fields = [
-        "company",
-        "title",
-        "location",
-        "employment_type",
-        "date_posted",
-        "valid_through",
-        "score",
-        "matched_keywords",
-        "platform",
-        "discovery_method",
-        "url",
-        "canonical_url",
-        "discovered_at",
-    ]
-
-    write_csv(RESULT_CSV, all_results, fields)
-    write_audit(audits)
-    write_run_log(all_results, audits)
-
-    console.print()
     display_results(all_results)
-    console.print()
+    export_csv(all_results)
+    export_json(all_results, audits)
     display_audit(audits)
 
-    elapsed = time.time() - started
-    verified = sum(a["status"] == "VERIFIED" for a in audits)
-
     console.print(
-        f"\n[bold green]"
-        f"✔ Scan complete in {elapsed:.1f}s"
-        f"[/bold green]"
+        f"\n[bold green]✔ FINAL: {len(all_results)} unique UK IAM/PAM result(s)[/bold green]"
     )
     console.print(
-        f"[green]✔ Qualified UK IAM/PAM vacancies: "
-        f"{len(all_results)}[/green]"
-    )
-    console.print(
-        f"[green]✔ Verified company sources: "
-        f"{verified}/{len(COMPANY_CAREERS)}[/green]"
-    )
-    console.print(
-        f"[cyan]✔ Results CSV: {RESULT_CSV}[/cyan]"
-    )
-    console.print(
-        f"[cyan]✔ Audit CSV: {AUDIT_CSV}[/cyan]"
-    )
-
-    if ARCHIVE_TO_GOOGLE:
-        console.print(
-            f"[cyan]✔ Google archive submissions: {archived}[/cyan]"
-        )
-
-    console.print(
-        "\n[bold]Discovery policy:[/bold] "
-        "official company/ATS destinations only; "
-        "search engines are used to discover those destinations."
+        "[cyan]Policy: official company/ATS domains only. "
+        "Search engines are used only to discover official/ATS URLs; "
+        "LinkedIn, Indeed, Reed and other job-board URLs are rejected.[/cyan]"
     )
 
 
