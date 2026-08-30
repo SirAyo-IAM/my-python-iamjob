@@ -1,20 +1,29 @@
-- name: Install Python dependencies
-  run: |
-    python -m pip install --upgrade pip
-    pip install requests beautifulsoup4 playwright
-    python -m playwright install chromium
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-- name: Run IAM job discovery
-  env:
-    USE_PLAYWRIGHT: "true"
-    ARCHIVE_TO_GOOGLE: "false"
-  run: |
-    python uk_iam_job_hunter_v3_fixed.py
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.12'
 
-- name: Send email
-  env:
-    BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-    REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-    BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-  run: |
-    python send_email.py
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      pip install requests beautifulsoup4 playwright
+      python -m playwright install chromium
+
+  - name: Run IAM job discovery
+    env:
+      USE_PLAYWRIGHT: "true"
+      ARCHIVE_TO_GOOGLE: "false"
+    run: |
+      python uk_iam_job_hunter_v3_fixed.py
+
+  - name: Send email
+    env:
+      BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+      REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
+      BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+    run: |
+      python send_email.py
