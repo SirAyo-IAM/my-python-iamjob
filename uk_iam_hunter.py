@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UK IAM / PAM JOB DISCOVERY ENGINE v5.1
+UK IAM / PAM JOB DISCOVERY ENGINE v5.2
 ====================================
 
 Purpose:
@@ -328,6 +328,13 @@ EXCLUDED_TITLE_TERMS = [
 
 # Search/corporate/navigation pages must never become final vacancies.
 NON_JOB_TITLE_PATTERNS = [
+    # Search/listing pages. Numeric counts change every day, so reject the
+    # pattern rather than a specific count such as "958 results for All jobs".
+    r"^[\d,]+\s+results?\s+for\b",
+    r"^search our job opportunities(?:\b|\s*-)",
+    r"^all jobs(?:\b|\s*-)",
+    r"^current job openings(?:\b|\s*-)",
+    r"^job opportunities(?:\b|\s*-)",
     r"^search jobs(?:\b|\s*-)",
     r"^job search(?:\b|\s*-)",
     r"^careers?$",
@@ -412,6 +419,15 @@ UK_TERMS = [
     "coventry",
     "derby",
     "york",
+    "knutsford",
+    "northampton",
+    "bournemouth",
+    "harlow",
+    "ipswich",
+    "preston",
+    "sunderland",
+    "dundee",
+    "kingston upon thames",
     "exeter",
     "liverpool",
     "newport",
@@ -457,6 +473,8 @@ WORKING_TERMS = [
 FOREIGN_LOCATION_TERMS = [
     "united states", "usa", "u.s.a", "canada", "australia", "spain",
     "germany", "france", "italy", "belgium", "netherlands", "vietnam",
+    "czechia", "czech republic", "ireland", "dublin", "mexico", "taiwan",
+    "hong kong", "japan", "tokyo", "israel", "tel aviv",
     "india", "singapore", "poland", "portugal", "switzerland", "austria",
     "united arab emirates", "dubai", "barcelona", "madrid", "paris",
     "berlin", "munich", "new york", "boston", "houston", "nashville",
@@ -466,11 +484,15 @@ FOREIGN_LOCATION_TERMS = [
 
 PLACEHOLDER_LOCATION_TERMS = [
     "location city",
+    "uk location not specified",
+    "location not specified",
     "state, country",
     "city, state, country",
     "near location",
     "choose locations",
     "select your preferred locations",
+    "multiple locations",
+    "various locations",
     "our locations",
     "locations",
     "all",
@@ -495,7 +517,14 @@ BLOCKED_JOB_BOARD_DOMAINS = {
 # Durable high-value sources. These are not individual vacancies; they are
 # listing/ATS sources used to discover live vacancies.
 DIRECT_DISCOVERY_SEEDS = [
+    # Barclays/TalentBrew: multiple focused searches catch identity titles that
+    # do not literally contain the acronym IAM (e.g. Identity & Access Lead).
     ("Barclays IAM search", "https://search.jobs.barclays/search-jobs/iam/22545/1/1"),
+    ("Barclays identity search", "https://search.jobs.barclays/search-jobs/identity/22545/1/1"),
+    ("Barclays access search", "https://search.jobs.barclays/search-jobs/access/22545/1/1"),
+    ("Barclays PAM search", "https://search.jobs.barclays/search-jobs/pam/22545/1/1"),
+    ("Barclays JML search", "https://search.jobs.barclays/search-jobs/jml/22545/1/1"),
+    ("Barclays entitlement search", "https://search.jobs.barclays/search-jobs/entitlement/22545/1/1"),
     ("Odevo jobs", "https://career.odevo.com/jobs"),
     ("Qube Greenhouse", "https://job-boards.greenhouse.io/quberesearchandtechnologies"),
 ]
@@ -532,7 +561,8 @@ GLOBAL_DISCOVERY_QUERIES = [
 DISCOVERY_TITLE_HINTS = [
     "iam", "identity", "access", "pam", "privileged", "cyberark",
     "sailpoint", "saviynt", "okta", "entra", "sso", "federation",
-    "directory services", "security",
+    "directory services", "jml", "entitlement", "ciam", "vaulting",
+    "security",
 ]
 
 # ============================================================================
@@ -1326,11 +1356,62 @@ def is_placeholder_location(location: str) -> bool:
     )
 
 
+def _phrase_present(phrase: str, text: str) -> bool:
+    """Boundary-aware phrase matching for locations."""
+    phrase = (phrase or "").strip().lower()
+    text = (text or "").lower()
+    if not phrase or not text:
+        return False
+    pattern = rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])"
+    return re.search(pattern, text, re.I) is not None
+
+
 def contains_foreign_location(location: str) -> bool:
     low = (location or "").lower()
-    if contains_uk(low):
+    return any(_phrase_present(term, low) for term in FOREIGN_LOCATION_TERMS)
+
+
+def contains_uk_location(location: str) -> bool:
+    """Check the *actual location field* for UK evidence.
+
+    Foreign phrases are removed before checking city names. This prevents the
+    classic false positive where "New York" was accepted because UK_TERMS
+    contains "york".
+    """
+    low = re.sub(r"\s+", " ", (location or "").strip().lower())
+    if not low:
         return False
-    return any(term in low for term in FOREIGN_LOCATION_TERMS)
+
+    # UK postcodes are strong job-location evidence.
+    if re.search(
+        r"\b(?:GIR\s?0AA|(?:[A-Z]{1,2}\d[A-Z\d]?|[A-Z]{1,2}\d{1,2})\s?\d[A-Z]{2})\b",
+        location or "",
+        re.I,
+    ):
+        return True
+
+    # Explicit country/nation markers always win.
+    strong_uk = [
+        "united kingdom", "great britain", "england", "scotland",
+        "wales", "northern ireland", "remote uk", "uk remote",
+    ]
+    if any(_phrase_present(term, low) for term in strong_uk):
+        return True
+    for code in ("uk", "gb", "gbr"):
+        if re.search(rf"(?<![a-z]){code}(?![a-z])", low):
+            return True
+
+    # Remove explicit foreign place phrases before checking UK city names.
+    scrubbed = low
+    for term in sorted(FOREIGN_LOCATION_TERMS, key=len, reverse=True):
+        scrubbed = re.sub(
+            rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])",
+            " ",
+            scrubbed,
+            flags=re.I,
+        )
+    scrubbed = re.sub(r"\s+", " ", scrubbed)
+    return contains_uk(scrubbed)
 
 
 def evaluate_uk_location(
@@ -1341,14 +1422,26 @@ def evaluate_uk_location(
     location = (location or "").strip()
 
     if location and not is_placeholder_location(location):
-        if contains_uk(location):
+        uk_location = contains_uk_location(location)
+        foreign_location = contains_foreign_location(location)
+
+        # Multi-location roles are valid when at least one explicit UK location
+        # exists, e.g. "Knutsford, United Kingdom | Prague, Czechia".
+        if uk_location:
             return True, f"job location: {location[:180]}"
-        if contains_foreign_location(location):
+
+        # Explicit foreign-only locations override any UK words in the global
+        # footer, navigation or employer description.
+        if foreign_location:
             return False, f"foreign job location: {location[:180]}"
 
-    # Missing/placeholder/remote-only locations need explicit UK evidence in the
-    # job-specific text or URL. We intentionally use only the leading body text
-    # to reduce matches caused by global footer/navigation content.
+        # An explicit location that cannot be recognised as UK should not be
+        # rescued by a global employer footer. Remote/multiple-location labels
+        # are handled as placeholders above.
+        return False, f"explicit location is not recognised as UK: {location[:180]}"
+
+    # Missing/placeholder locations need job-specific UK evidence. Only inspect
+    # the leading body text to avoid matching huge site-wide footers.
     body_head = (description or "")[:6000]
     if contains_uk(body_head):
         return True, "UK evidence in job description"
@@ -1471,6 +1564,26 @@ def score_iam_relevance(
 
     return score, keywords, core_body_signals, title_anchor, adjacent_title
 
+
+
+CORE_IAM_TITLE_MARKERS = [
+    "iam", "identity", "access management", "access governance",
+    "privileged access", "pam", "cyberark", "sailpoint", "saviynt",
+    "okta", "entra", "azure ad", "identityiq", "identitynow",
+    "jml", "entitlement", "ciam", "single sign-on", "sso",
+]
+
+
+def classify_match_type(title: str) -> str:
+    """Separate core IAM vacancies from IAM-heavy security-adjacent roles."""
+    low = re.sub(r"\s+", " ", (title or "").strip().lower())
+    if any(keyword_present(term, low) for term in CORE_IAM_TITLE_MARKERS):
+        return "CORE IAM"
+    if any(term in low for term in ADJACENT_TITLE_TERMS):
+        return "ADJACENT IDENTITY/SECURITY"
+    # Generic titles can qualify only through the strict body-signal gate. They
+    # are retained as adjacent rather than presented as core IAM.
+    return "ADJACENT IDENTITY/SECURITY"
 
 def extract_working_arrangement(text: str) -> str:
     low = text.lower()
@@ -2741,7 +2854,7 @@ def scan_greenhouse_job_by_id(
         description=description,
         location=location,
         url=url,
-        method="Greenhouse Job API -> V5.1 dynamic discovery",
+        method="Greenhouse Job API -> V5.2 dynamic discovery",
     )
     return [result] if result else []
 
@@ -2770,9 +2883,187 @@ def fetch_candidate_page(url: str) -> Optional[Tuple[str, str]]:
     return html_content, final_url
 
 
+
+# ---------------------------------------------------------------------------
+# Barclays / TalentBrew adapter
+# ---------------------------------------------------------------------------
+
+def is_barclays_url(url: str) -> bool:
+    return host(url) == "search.jobs.barclays"
+
+
+def is_barclays_job_url(url: str) -> bool:
+    if not is_barclays_url(url):
+        return False
+    path = urlparse(url).path.lower()
+    return re.search(r"/(?:en/)?job/", path) is not None
+
+
+def discover_barclays_job_links(
+    soup: BeautifulSoup,
+    base_url: str,
+) -> List[str]:
+    """Extract relevant individual TalentBrew job cards only.
+
+    Anchors before the results heading are usually personalised "Jobs for you"
+    and are deliberately ignored. Listing/search pages themselves are never
+    returned as vacancies.
+    """
+    heading = None
+    for node in soup.find_all(["h1", "h2"]):
+        label = node.get_text(" ", strip=True)
+        if re.search(r"[\d,]+\s+results?\s+for\b", label, re.I):
+            heading = node
+            break
+
+    anchors = (
+        heading.find_all_next("a", href=True)
+        if heading is not None
+        else soup.find_all("a", href=True)
+    )
+
+    ranked: List[Tuple[int, str]] = []
+    seen: Set[str] = set()
+
+    for anchor in anchors:
+        href = normalise_url(urljoin(base_url, str(anchor.get("href", ""))))
+        if not is_barclays_job_url(href):
+            continue
+
+        title = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True)).strip()
+        if not title or is_non_job_title(title):
+            continue
+
+        low = title.lower()
+        priority = 0
+        if any(keyword_present(term, low) for term in CORE_IAM_TITLE_MARKERS):
+            priority += 20
+        if any(term in low for term in ADJACENT_TITLE_TERMS):
+            priority += 8
+        if any(term in low for term in DISCOVERY_TITLE_HINTS):
+            priority += 6
+
+        # We intentionally require an identity/IAM clue in the title for the
+        # Barclays listing adapter. This prevents unrelated "Jobs for you"
+        # and broad search noise from consuming the candidate budget.
+        if priority <= 0:
+            continue
+
+        key = canonical_url(href)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ranked.append((priority, href))
+
+    ranked.sort(key=lambda item: (-item[0], item[1].lower()))
+    return [url for _, url in ranked[:MAX_LISTING_LINKS]]
+
+
+def _barclays_location_after_title(soup: BeautifulSoup, title: str) -> str:
+    lines = [
+        re.sub(r"\s+", " ", line).strip()
+        for line in soup.get_text("\n", strip=True).splitlines()
+        if re.sub(r"\s+", " ", line).strip()
+    ]
+    title_low = re.sub(r"\s+", " ", (title or "").strip().lower())
+
+    try:
+        pos = next(
+            i for i, line in enumerate(lines)
+            if re.sub(r"\s+", " ", line.lower()) == title_low
+        )
+    except StopIteration:
+        pos = -1
+
+    if pos >= 0:
+        for line in lines[pos + 1: pos + 9]:
+            low = line.lower()
+            if any(
+                marker in low
+                for marker in [
+                    "apply for job", "key information", "date live:",
+                    "business area:", "area of expertise:", "contract:",
+                    "reference code:",
+                ]
+            ):
+                continue
+            if (
+                contains_uk_location(line)
+                or contains_foreign_location(line)
+                or re.search(r"\b[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}\b", line, re.I)
+            ):
+                return line[:500]
+
+    body = soup.get_text(" ", strip=True)
+    patterns = [
+        r"(?:this role|successful candidate)\s+(?:will\s+be|is)\s+based\s+in\s+([A-Za-z][A-Za-z .&'-]{2,80})",
+        r"based in\s+([A-Za-z][A-Za-z .&'-]{2,80})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, body, re.I)
+        if match:
+            candidate = match.group(1).strip(" .,-")
+            # Stop at common sentence continuations.
+            candidate = re.split(
+                r"\b(?:our|with|and our|where|the role|you will)\b",
+                candidate,
+                maxsplit=1,
+                flags=re.I,
+            )[0].strip(" .,-")
+            if candidate:
+                if contains_uk(candidate) and "united kingdom" not in candidate.lower():
+                    candidate += ", United Kingdom"
+                return candidate[:500]
+
+    return ""
+
+
+def extract_barclays_job_result(
+    soup: BeautifulSoup,
+    final_url: str,
+    method: str,
+) -> Optional[Dict[str, Any]]:
+    if not is_barclays_job_url(final_url):
+        return None
+
+    title = page_title(soup)
+    if not title or is_non_job_title(title):
+        return None
+
+    text_value = soup.get_text(" ", strip=True)
+    location = _barclays_location_after_title(soup, title)
+
+    employment_type = ""
+    emp_match = re.search(
+        r"\bContract\s*:\s*([^|]{1,80}?)(?=\s+(?:Reference Code|Date live|Business Area|Area of Expertise)\s*:|$)",
+        text_value,
+        re.I,
+    )
+    if emp_match:
+        employment_type = re.sub(r"\s+", " ", emp_match.group(1)).strip()
+    if not employment_type:
+        employment_type = extract_employment_type(text_value)
+
+    date_posted = ""
+    date_match = re.search(r"\bDate live\s*:\s*(\d{1,2}/\d{1,2}/\d{4})", text_value, re.I)
+    if date_match:
+        date_posted = date_match.group(1)
+
+    company = ("Barclays", ["search.jobs.barclays"], [])
+    return build_result(
+        company=company,
+        title=title,
+        description=text_value,
+        location=location,
+        url=final_url,
+        method=f"{method} -> Barclays/TalentBrew Job Adapter",
+        date_posted=date_posted,
+        employment_type=employment_type,
+    )
+
 def extract_results_from_candidate(
     url: str,
-    method: str = "V5.1 global discovery",
+    method: str = "V5.2 global discovery",
 ) -> List[Dict[str, Any]]:
     """Fetch one discovered URL and turn it into zero or more validated jobs."""
     url = normalise_url(url)
@@ -2792,6 +3083,12 @@ def extract_results_from_candidate(
         return []
     html_content, final_url = fetched
     soup = BeautifulSoup(html_content, "html.parser")
+
+    if is_barclays_job_url(final_url):
+        barclays_result = extract_barclays_job_result(soup, final_url, method)
+        if barclays_result:
+            return [barclays_result]
+
     company = dynamic_company(final_url, soup)
 
     results: List[Dict[str, Any]] = []
@@ -2835,6 +3132,11 @@ def discover_candidate_links_from_listing(url: str) -> List[str]:
         return []
     html_content, final_url = fetched
     soup = BeautifulSoup(html_content, "html.parser")
+
+    if is_barclays_url(final_url):
+        barclays_links = discover_barclays_job_links(soup, final_url)
+        if barclays_links:
+            return barclays_links
 
     ranked: List[Tuple[int, str]] = []
     seen: Set[str] = set()
@@ -3177,6 +3479,7 @@ def build_result(
         "salary": salary,
         "date_posted": date_posted,
         "job_reference": extract_reference(full_text),
+        "match_type": classify_match_type(title),
         "match_score": score,
         "confidence": confidence,
         "match_reason": match_reason,
@@ -4400,6 +4703,7 @@ RESULT_FIELDS = [
     "salary",
     "date_posted",
     "job_reference",
+    "match_type",
     "match_score",
     "confidence",
     "match_reason",
@@ -4675,10 +4979,11 @@ def display_audit(
 # ============================================================================
 
 def run_self_test() -> None:
-    """Offline regression tests for V5 matching logic.
+    """Comprehensive offline regression tests for V5.2.
 
-    These are intentionally based on the live-good/live-bad patterns that
-    exposed V4's recall/precision problems. No network access is required.
+    Covers classifier precision/recall, location handling, listing-page
+    rejection, match-type categorisation, Barclays/TalentBrew discovery and
+    metadata extraction, and Qube Greenhouse URL identity.
     """
     cases = [
         (
@@ -4708,11 +5013,20 @@ def run_self_test() -> None:
             "Permanent",
         ),
         (
-            "Qube identity role",
+            "Qube Senior IAM Engineer",
             True,
-            "Identity & Access Management Engineer",
+            "Senior Identity and Access Management (IAM) Engineer",
             "Identity governance, privileged access management, CyberArk and SSO.",
             "London, United Kingdom",
+            "Permanent",
+        ),
+        (
+            "Qube Platform Security London",
+            True,
+            "Platform Security Engineer (DevSecOps)",
+            "Own identity governance, privileged access management, SSO, "
+            "SAML, provisioning and identity lifecycle controls.",
+            "London",
             "Permanent",
         ),
         (
@@ -4755,22 +5069,134 @@ def run_self_test() -> None:
             "Barcelona, Spain",
             "Permanent",
         ),
+        (
+            "Qube Security Engineer New York",
+            False,
+            "Security Engineer - Platform Security",
+            "Identity governance, PAM, RBAC and security engineering.",
+            "New York",
+            "Permanent",
+        ),
+        (
+            "Barclays results listing page",
+            False,
+            "1047 results for All jobs",
+            "IAM PAM JML access reviews authentication security.",
+            "London, United Kingdom",
+            "Permanent",
+        ),
+        (
+            "Generic search opportunities page",
+            False,
+            "Search our Job Opportunities at Barclays",
+            "IAM identity access management SailPoint CyberArk.",
+            "London, United Kingdom",
+            "Permanent",
+        ),
     ]
 
-    failures = []
+    failures: List[str] = []
     for name, expected, title, desc, location, emp in cases:
         matched, _, score, confidence, reason = is_target_job(
             title, desc, location, "https://example.com/jobs/test", emp
         )
         ok = matched is expected
         print(
-            f"{'PASS' if ok else 'FAIL'} | {name:38} | "
+            f"{'PASS' if ok else 'FAIL'} | {name:40} | "
             f"expected={expected} got={matched} score={score} {confidence} | {reason}"
         )
         if not ok:
             failures.append(name)
 
-    # Critical V5 dedupe regression: job IDs in query strings must survive.
+    # Match-type regression.
+    type_cases = [
+        ("IAM Engineer", "CORE IAM"),
+        ("Identity & Access Lead - BPL", "CORE IAM"),
+        ("JML Control Monitoring SME", "CORE IAM"),
+        ("Platform Security Engineer (DevSecOps)", "ADJACENT IDENTITY/SECURITY"),
+    ]
+    for title, expected_type in type_cases:
+        got = classify_match_type(title)
+        ok = got == expected_type
+        print(f"{'PASS' if ok else 'FAIL'} | match type | {title} -> {got}")
+        if not ok:
+            failures.append(f"match type: {title}")
+
+    # New York must not be interpreted as UK because of the substring "York".
+    if contains_uk_location("New York"):
+        failures.append("New York UK collision")
+        print("FAIL | New York UK collision")
+    else:
+        print("PASS | New York is not UK")
+
+    if not contains_uk_location("York, England, United Kingdom"):
+        failures.append("York England UK detection")
+        print("FAIL | York, England UK detection")
+    else:
+        print("PASS | York, England is UK")
+
+    # Synthetic Barclays search page: only IAM/identity job-card URLs survive.
+    listing_html = """
+    <html><body>
+      <a href="/job/pune/full-stack-developer/13015/111">Full Stack Developer</a>
+      <h1>53 results for identity</h1>
+      <a href="/job/london/identity-and-access-lead-bpl/13015/98108912256">Identity &amp; Access Lead - BPL</a>
+      <a href="/job/knutsford/iam-governance-specialist/13015/99675191568">IAM Governance Specialist</a>
+      <a href="/job/pune/aws-data-engineer/13015/222">AWS Data Engineer</a>
+      <a href="/job/london/jml-control-monitoring-sme/13015/333">JML Control Monitoring SME</a>
+    </body></html>
+    """
+    listing_soup = BeautifulSoup(listing_html, "html.parser")
+    links = discover_barclays_job_links(
+        listing_soup,
+        "https://search.jobs.barclays/search-jobs/identity/22545/1/1",
+    )
+    link_blob = " ".join(links)
+    listing_ok = (
+        "identity-and-access-lead-bpl" in link_blob
+        and "iam-governance-specialist" in link_blob
+        and "jml-control-monitoring-sme" in link_blob
+        and "full-stack-developer" not in link_blob
+        and "aws-data-engineer" not in link_blob
+    )
+    print(f"{'PASS' if listing_ok else 'FAIL'} | Barclays listing adapter | {len(links)} relevant links")
+    if not listing_ok:
+        failures.append("Barclays listing adapter")
+
+    # Synthetic Barclays job page models the current TalentBrew structure.
+    job_html = """
+    <html><body>
+      <h1>Identity &amp; Access Lead - BPL</h1>
+      <div>London, United Kingdom</div>
+      <a>Apply for job</a>
+      <h2>Key information</h2>
+      <div>Date live: 29/07/2026</div>
+      <div>Business Area: BPL - Technology</div>
+      <div>Contract: Permanent</div>
+      <div>Reference Code: JR-0000122273</div>
+      <p>Extensive experience of Identity &amp; Access Management (IAM).</p>
+      <p>Experience of Joiner-Mover-Leaver pipeline creation and innovation.</p>
+      <p>The successful candidate will be based in London.</p>
+    </body></html>
+    """
+    job_soup = BeautifulSoup(job_html, "html.parser")
+    result = extract_barclays_job_result(
+        job_soup,
+        "https://search.jobs.barclays/job/london/identity-and-access-lead-bpl/13015/98108912256",
+        "self-test",
+    )
+    barclays_job_ok = bool(
+        result
+        and result.get("company") == "Barclays"
+        and result.get("match_type") == "CORE IAM"
+        and "London" in result.get("location", "")
+        and str(result.get("employment_type", "")).lower().startswith("permanent")
+    )
+    print(f"{'PASS' if barclays_job_ok else 'FAIL'} | Barclays job metadata adapter")
+    if not barclays_job_ok:
+        failures.append("Barclays job metadata adapter")
+
+    # Critical Qube dedupe regression: job IDs in query strings must survive.
     q1 = canonical_url("https://www.qube-rt.com/careers/job?gh_jid=8460881002")
     q2 = canonical_url("https://www.qube-rt.com/careers/job?gh_jid=9999999999")
     if q1 == q2 or "gh_jid=8460881002" not in q1:
@@ -4779,10 +5205,22 @@ def run_self_test() -> None:
     else:
         print("PASS | Qube gh_jid canonicalisation")
 
-    if failures:
-        raise RuntimeError("V5 self-test failed: " + ", ".join(failures))
+    # Direct discovery must include multiple Barclays search routes rather than
+    # relying on the literal IAM acronym alone.
+    seed_blob = " ".join(url for _, url in DIRECT_DISCOVERY_SEEDS)
+    required_seed_terms = ["/iam/", "/identity/", "/access/", "/pam/", "/jml/"]
+    seeds_ok = all(term in seed_blob for term in required_seed_terms)
+    print(f"{'PASS' if seeds_ok else 'FAIL'} | Barclays focused discovery seeds")
+    if not seeds_ok:
+        failures.append("Barclays focused discovery seeds")
 
-    print(f"V5.1 self-test passed: {len(cases)} classifier cases + URL identity test")
+    if failures:
+        raise RuntimeError("V5.2 self-test failed: " + ", ".join(failures))
+
+    print(
+        f"V5.2 self-test passed: {len(cases)} classifier cases, "
+        f"{len(type_cases)} match-type cases + location, Barclays and URL tests"
+    )
 
 
 def main() -> None:
@@ -4793,7 +5231,7 @@ def main() -> None:
     started = time.time()
 
     print()
-    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5.1")
+    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5.2")
     print(f"Companies/fallback sources: {len(COMPANIES)}")
     print(f"ATS API boards: {len(ATS_BOARDS)}")
     print(f"Global discovery: {'ON' if USE_GLOBAL_DISCOVERY else 'OFF'}")
