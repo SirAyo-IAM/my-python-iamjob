@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Email the UK IAM job discovery results through Brevo.
+Email UK IAM Job Hunter V5.2 results through Brevo.
 
 Required environment variables:
     BREVO_API_KEY
@@ -64,10 +64,18 @@ def safe(value: object) -> str:
 def build_html(jobs: List[Dict[str, str]]) -> str:
     generated = datetime.now(timezone.utc).strftime("%d %B %Y %H:%M UTC")
 
+    core_count = sum(
+        1 for job in jobs if job.get("match_type", "").strip().upper() == "CORE IAM"
+    )
+    adjacent_count = sum(
+        1 for job in jobs
+        if job.get("match_type", "").strip().upper() == "ADJACENT IDENTITY/SECURITY"
+    )
+
     if not jobs:
         rows = """
         <tr>
-          <td colspan="8" style="padding:16px;text-align:center;">
+          <td colspan="11" style="padding:16px;text-align:center;">
             No matching UK IAM/PAM vacancies were found in this run.
           </td>
         </tr>
@@ -84,6 +92,9 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
             employment = safe(job.get("employment_type", ""))
             salary = safe(job.get("salary", ""))
             posted = safe(job.get("date_posted", ""))
+            match_type = safe(job.get("match_type", ""))
+            score = safe(job.get("match_score", ""))
+            confidence = safe(job.get("confidence", ""))
             keywords = safe(job.get("matched_keywords", ""))
 
             if url:
@@ -100,6 +111,9 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
                 <tr>
                   <td>{company}</td>
                   <td>{role}</td>
+                  <td>{match_type}</td>
+                  <td>{score}</td>
+                  <td>{confidence}</td>
                   <td>{location}</td>
                   <td>{work}</td>
                   <td>{employment}</td>
@@ -124,13 +138,15 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
 <html>
 <head>
   <meta charset="utf-8">
-  <title>UK IAM Job Hunter</title>
+  <title>UK IAM Job Hunter V5.2</title>
 </head>
 <body style="font-family:Arial,Helvetica,sans-serif;color:#202124;">
-  <div style="max-width:1200px;margin:0 auto;">
-    <h2 style="margin-bottom:6px;">UK IAM / PAM Job Hunter</h2>
+  <div style="max-width:1400px;margin:0 auto;">
+    <h2 style="margin-bottom:6px;">UK IAM / PAM Job Hunter V5.2</h2>
     <p style="margin-top:0;">
       <strong>{len(jobs)}</strong> matching job(s) found.<br>
+      Core IAM: <strong>{core_count}</strong> &nbsp;|&nbsp;
+      Adjacent identity/security: <strong>{adjacent_count}</strong><br>
       Report generated: {safe(generated)}
     </p>
 
@@ -140,12 +156,15 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
       <table
         cellpadding="0"
         cellspacing="0"
-        style="border-collapse:collapse;width:100%;font-size:13px;"
+        style="border-collapse:collapse;width:100%;font-size:12px;"
       >
         <thead>
           <tr>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Company</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Role</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Match Type</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Score</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Confidence</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Location</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Work</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Employment</th>
@@ -161,7 +180,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     </div>
 
     <p style="margin-top:20px;font-size:12px;color:#666;">
-      Generated automatically by the UK IAM / PAM Job Hunter.
+      Generated automatically by UK IAM / PAM Job Hunter V5.2.
     </p>
   </div>
 </body>
@@ -186,9 +205,9 @@ def build_payload(
                 "email": recipient_email,
             }
         ],
-        "subject": f"UK IAM Job Hunter - {len(jobs)} match(es) - {today}",
+        "subject": f"UK IAM Job Hunter V5.2 - {len(jobs)} match(es) - {today}",
         "htmlContent": build_html(jobs),
-        "tags": ["uk-iam-job-hunter"],
+        "tags": ["uk-iam-job-hunter-v5-2"],
     }
 
 
