@@ -20,9 +20,7 @@ jobs:
 
       # ---------------------------------------------------------
       # 2. SET UP PYTHON
-      # IMPORTANT: no pip cache is enabled here.
-      # This avoids setup-python looking for requirements.txt or
-      # pyproject.toml when those files do not exist.
+      # No pip cache, so requirements.txt is not required.
       # ---------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,8 +38,8 @@ jobs:
           echo "Repository contents:"
           ls -la
 
-          test -f uk_iam_job_hunter_v3_fixed.py || {
-            echo "ERROR: uk_iam_job_hunter_v3_fixed.py was not found in the repository root."
+          test -f uk_iam_hunter.py || {
+            echo "ERROR: uk_iam_hunter.py was not found in the repository root."
             exit 1
           }
 
@@ -61,6 +59,7 @@ jobs:
           set -euo pipefail
 
           python -m pip install --upgrade pip
+
           python -m pip install \
             requests \
             beautifulsoup4 \
@@ -69,7 +68,7 @@ jobs:
             playwright
 
       # ---------------------------------------------------------
-      # 5. INSTALL PLAYWRIGHT CHROMIUM + SYSTEM DEPENDENCIES
+      # 5. INSTALL PLAYWRIGHT CHROMIUM
       # ---------------------------------------------------------
       - name: Install Playwright Chromium
         shell: bash
@@ -78,7 +77,7 @@ jobs:
           python -m playwright install --with-deps chromium
 
       # ---------------------------------------------------------
-      # 6. VERIFY PYTHON ENVIRONMENT + COMPILE SCRIPTS
+      # 6. VERIFY PYTHON ENVIRONMENT AND SCRIPT SYNTAX
       # ---------------------------------------------------------
       - name: Verify Python environment
         shell: bash
@@ -105,12 +104,14 @@ jobs:
           python -m playwright --version
 
           echo "Checking Python syntax..."
-          python -m py_compile uk_iam_job_hunter_v3_fixed.py
+
+          python -m py_compile uk_iam_hunter.py
           python -m py_compile send_email.py
+
           echo "Python syntax: OK"
 
       # ---------------------------------------------------------
-      # 7. RUN IAM JOB DISCOVERY ENGINE V3
+      # 7. RUN IAM JOB DISCOVERY ENGINE
       # ---------------------------------------------------------
       - name: Run UK IAM Hunter
         env:
@@ -119,10 +120,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python uk_iam_job_hunter_v3_fixed.py
+          python uk_iam_hunter.py
 
       # ---------------------------------------------------------
-      # 8. VERIFY OUTPUT FILES
+      # 8. VERIFY GENERATED OUTPUT FILES
       # ---------------------------------------------------------
       - name: Check results
         shell: bash
@@ -153,6 +154,7 @@ jobs:
 
           echo ""
           echo "Generated files:"
+
           ls -lh \
             uk_iam_results.csv \
             uk_iam_results.json \
