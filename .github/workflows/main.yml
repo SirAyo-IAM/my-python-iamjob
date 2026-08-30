@@ -12,38 +12,134 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get repository
-        uses: actions/checkout@v6
 
+      # ---------------------------------------------------------
+      # 1. CHECKOUT REPOSITORY
+      # ---------------------------------------------------------
+      - name: Get repository
+        uses: actions/checkout@v4
+
+
+      # ---------------------------------------------------------
+      # 2. SET UP PYTHON
+      # ---------------------------------------------------------
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
-      - name: Install dependencies
-        run: pip install requests beautifulsoup4 rich
 
-      - name: Run UK IAM Hunter
-        run: python uk_iam_hunter.py
-
-      - name: Check CSV exists
+      # ---------------------------------------------------------
+      # 3. INSTALL ALL REQUIRED PYTHON LIBRARIES
+      # ---------------------------------------------------------
+      - name: Install Python dependencies
         run: |
+          python -m pip install --upgrade pip
+
+          python -m pip install \
+            requests \
+            beautifulsoup4 \
+            lxml \
+            rich \
+            playwright
+
+
+      # ---------------------------------------------------------
+      # 4. INSTALL PLAYWRIGHT CHROMIUM + SYSTEM DEPENDENCIES
+      # ---------------------------------------------------------
+      - name: Install Playwright Chromium
+        run: |
+          python -m playwright install --with-deps chromium
+
+
+      # ---------------------------------------------------------
+      # 5. VERIFY EVERYTHING IS INSTALLED
+      # ---------------------------------------------------------
+      - name: Verify Python environment
+        run: |
+          python --version
+
+          python - <<'PY'
+          import requests
+          import bs4
+          import lxml
+          import rich
+          import playwright
+
+          print("requests: OK")
+          print("beautifulsoup4: OK")
+          print("lxml: OK")
+          print("rich: OK")
+          print("playwright: OK")
+          PY
+
+          python -m playwright --version
+
+
+      # ---------------------------------------------------------
+      # 6. RUN IAM JOB DISCOVERY ENGINE
+      # ---------------------------------------------------------
+      - name: Run UK IAM Hunter
+        env:
+          USE_PLAYWRIGHT: "true"
+          ARCHIVE_TO_GOOGLE: "true"
+        run: |
+          python uk_iam_job_hunter_v2.py
+
+
+      # ---------------------------------------------------------
+      # 7. VERIFY OUTPUT FILES
+      # ---------------------------------------------------------
+      - name: Check results
+        run: |
+          echo "Checking generated files..."
+
           if [ ! -f uk_iam_results.csv ]; then
             echo "ERROR: uk_iam_results.csv was not created"
             exit 1
           fi
-          echo "CSV found successfully"
+
+          if [ ! -f uk_iam_results.json ]; then
+            echo "ERROR: uk_iam_results.json was not created"
+            exit 1
+          fi
+
+          echo ""
+          echo "CSV found:"
           ls -lh uk_iam_results.csv
 
-      - name: Upload results
+          echo ""
+          echo "JSON found:"
+          ls -lh uk_iam_results.json
+
+          echo ""
+          echo "Number of CSV lines:"
+          wc -l uk_iam_results.csv
+
+
+      # ---------------------------------------------------------
+      # 8. UPLOAD RESULTS
+      # ---------------------------------------------------------
+      - name: Upload job results
         uses: actions/upload-artifact@v4
         with:
           name: uk-iam-results
-          path: uk_iam_results.csv
+          path: |
+            uk_iam_results.csv
+            uk_iam_results.json
+            uk_iam_source_audit.csv
+            uk_iam_run_log.json
+          if-no-files-found: warn
 
+
+      # ---------------------------------------------------------
+      # 9. SEND EMAIL REPORT
+      # ---------------------------------------------------------
       - name: Send email
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-        run: python send_email.py
+        run: |
+          python send_email.py
