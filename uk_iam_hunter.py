@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UK IAM / PAM JOB DISCOVERY ENGINE v5
+UK IAM / PAM JOB DISCOVERY ENGINE v5.1
 ====================================
 
 Purpose:
@@ -46,6 +46,7 @@ import os
 import re
 import sys
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -68,30 +69,38 @@ from bs4 import BeautifulSoup
 # CONFIGURATION
 # ============================================================================
 
-REQUEST_TIMEOUT = 18
-SEARCH_TIMEOUT = 15
-JOB_TIMEOUT = 18
+REQUEST_TIMEOUT = int(os.getenv("IAM_REQUEST_TIMEOUT", "12"))
+SEARCH_TIMEOUT = int(os.getenv("IAM_SEARCH_TIMEOUT", "8"))
+JOB_TIMEOUT = int(os.getenv("IAM_JOB_TIMEOUT", "12"))
 
 MAX_WORKERS = int(os.getenv("IAM_MAX_WORKERS", "8"))
 
 # Deep discovery.
-MAX_PAGES_PER_COMPANY = 35
-MAX_JOB_LINKS_PER_COMPANY = 300
-MAX_SITEMAP_URLS = 2500
+MAX_PAGES_PER_COMPANY = int(os.getenv("IAM_MAX_PAGES_PER_COMPANY", "6"))
+MAX_JOB_LINKS_PER_COMPANY = int(os.getenv("IAM_MAX_JOB_LINKS_PER_COMPANY", "40"))
+MAX_SITEMAP_URLS = int(os.getenv("IAM_MAX_SITEMAP_URLS", "500"))
 
 # V5 open-ended discovery. Unlike V4, discovery is not limited to the
 # predefined company database. Global search results and ATS/listing pages
 # can introduce employers dynamically.
 USE_GLOBAL_DISCOVERY = os.getenv("USE_GLOBAL_DISCOVERY", "true").lower() == "true"
-GLOBAL_SEARCH_QUERY_LIMIT = int(os.getenv("GLOBAL_SEARCH_QUERY_LIMIT", "18"))
-MAX_GLOBAL_CANDIDATES = int(os.getenv("MAX_GLOBAL_CANDIDATES", "320"))
-MAX_LISTING_LINKS = int(os.getenv("MAX_LISTING_LINKS", "100"))
+USE_COMPANY_SEARCH_DISCOVERY = os.getenv(
+    "USE_COMPANY_SEARCH_DISCOVERY", "false"
+).lower() == "true"
+SEARCH_ENGINE_MODE = os.getenv("SEARCH_ENGINE_MODE", "light").strip().lower()
+COMPANY_SCAN_SECONDS = int(os.getenv("IAM_COMPANY_SCAN_SECONDS", "75"))
+PLAYWRIGHT_BUDGET = int(os.getenv("IAM_PLAYWRIGHT_BUDGET", "10"))
+_playwright_calls = 0
+_playwright_lock = threading.Lock()
+GLOBAL_SEARCH_QUERY_LIMIT = int(os.getenv("GLOBAL_SEARCH_QUERY_LIMIT", "12"))
+MAX_GLOBAL_CANDIDATES = int(os.getenv("MAX_GLOBAL_CANDIDATES", "140"))
+MAX_LISTING_LINKS = int(os.getenv("MAX_LISTING_LINKS", "60"))
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
 
 # Search engine discovery.
 USE_SEARCH_DISCOVERY = True
-MAX_SEARCH_RESULTS = 20
-SEARCH_QUERIES_PER_COMPANY = 16
+MAX_SEARCH_RESULTS = int(os.getenv("IAM_MAX_SEARCH_RESULTS", "12"))
+SEARCH_QUERIES_PER_COMPANY = int(os.getenv("IAM_SEARCH_QUERIES_PER_COMPANY", "6"))
 
 # High-precision V4 relevance threshold.
 IAM_MIN_SCORE = int(os.getenv("IAM_MIN_SCORE", "75"))
@@ -100,10 +109,10 @@ HIGH_CONFIDENCE_SCORE = int(os.getenv("IAM_HIGH_CONFIDENCE_SCORE", "110"))
 # Browser rendering.
 USE_PLAYWRIGHT = os.getenv(
     "USE_PLAYWRIGHT",
-    "true"
+    "false"
 ).lower() == "true"
 
-PLAYWRIGHT_TIMEOUT_MS = 35000
+PLAYWRIGHT_TIMEOUT_MS = int(os.getenv("IAM_PLAYWRIGHT_TIMEOUT_MS", "15000"))
 
 # Google archive.
 ARCHIVE_TO_GOOGLE = os.getenv(
@@ -2522,7 +2531,11 @@ def search_urls(
     """
     results: List[str] = []
 
-    engines = [google_search, bing_search, bing_rss_search, duckduckgo_search]
+    if SEARCH_ENGINE_MODE == "full":
+        engines = [google_search, bing_search, bing_rss_search, duckduckgo_search]
+    else:
+        engines = [bing_rss_search, duckduckgo_search]
+
     if BRAVE_SEARCH_API_KEY:
         engines.insert(0, brave_search)
 
@@ -2728,7 +2741,7 @@ def scan_greenhouse_job_by_id(
         description=description,
         location=location,
         url=url,
-        method="Greenhouse Job API -> V5 dynamic discovery",
+        method="Greenhouse Job API -> V5.1 dynamic discovery",
     )
     return [result] if result else []
 
@@ -2759,7 +2772,7 @@ def fetch_candidate_page(url: str) -> Optional[Tuple[str, str]]:
 
 def extract_results_from_candidate(
     url: str,
-    method: str = "V5 global discovery",
+    method: str = "V5.1 global discovery",
 ) -> List[Dict[str, Any]]:
     """Fetch one discovered URL and turn it into zero or more validated jobs."""
     url = normalise_url(url)
@@ -2951,8 +2964,15 @@ def render_page(
     url: str,
 ) -> Optional[Tuple[str, str]]:
 
+    global _playwright_calls
+
     if not USE_PLAYWRIGHT:
         return None
+
+    with _playwright_lock:
+        if _playwright_calls >= PLAYWRIGHT_BUDGET:
+            return None
+        _playwright_calls += 1
 
     try:
 
@@ -2994,19 +3014,18 @@ def render_page(
             )
 
             page.wait_for_timeout(
-                2500
+                1000
             )
 
-            # Trigger lazy-loading.
-            for _ in range(5):
+            for _ in range(2):
 
                 page.mouse.wheel(
                     0,
-                    3000,
+                    2500,
                 )
 
                 page.wait_for_timeout(
-                    500
+                    250
                 )
 
             html_content = (
@@ -3184,6 +3203,10 @@ def crawl_company(
     name, domains, seeds = company
 
     session = make_session()
+    company_deadline = time.monotonic() + COMPANY_SCAN_SECONDS
+
+    def company_time_left() -> bool:
+        return time.monotonic() < company_deadline
 
     results = []
 
@@ -3211,6 +3234,9 @@ def crawl_company(
     # ------------------------------------------------------------------------
 
     for seed in seeds:
+        if not company_time_left():
+            audit["status"] = "PARTIAL_TIMEOUT"
+            break
 
         response = fetch(
             session,
@@ -3248,6 +3274,9 @@ def crawl_company(
     sitemap_candidates = []
 
     for seed in verified_seeds:
+        if not company_time_left():
+            audit["status"] = "PARTIAL_TIMEOUT"
+            break
 
         try:
 
@@ -3259,6 +3288,9 @@ def crawl_company(
             )
 
             for sitemap in sitemaps:
+                if not company_time_left():
+                    audit["status"] = "PARTIAL_TIMEOUT"
+                    break
 
                 urls = parse_sitemap(
                     session,
@@ -3316,6 +3348,13 @@ def crawl_company(
         )
     )
 
+    sitemap_candidates.sort(
+        key=lambda u: (
+            0 if any(term in u.lower() for term in DISCOVERY_TITLE_HINTS) else 1,
+            u.lower(),
+        )
+    )
+
     audit["sitemap_urls"] = len(
         sitemap_candidates
     )
@@ -3331,7 +3370,7 @@ def crawl_company(
 
     search_candidates = []
 
-    if USE_SEARCH_DISCOVERY:
+    if USE_SEARCH_DISCOVERY and USE_COMPANY_SEARCH_DISCOVERY:
 
         queries = build_search_queries(
             company
@@ -3339,6 +3378,9 @@ def crawl_company(
         audit["queries"] = len(queries)
 
         for query in queries:
+            if not company_time_left():
+                audit["status"] = "PARTIAL_TIMEOUT"
+                break
 
             try:
 
@@ -3418,6 +3460,7 @@ def crawl_company(
         page_queue
         and len(visited_pages)
         < MAX_PAGES_PER_COMPANY
+        and company_time_left()
     ):
 
         page_url = normalise_url(
@@ -3647,6 +3690,9 @@ def crawl_company(
     # ------------------------------------------------------------------------
 
     for job_url in job_links:
+        if not company_time_left():
+            audit["status"] = "PARTIAL_TIMEOUT"
+            break
 
         response = fetch(
             session,
@@ -4736,7 +4782,7 @@ def run_self_test() -> None:
     if failures:
         raise RuntimeError("V5 self-test failed: " + ", ".join(failures))
 
-    print(f"V5 self-test passed: {len(cases)} classifier cases + URL identity test")
+    print(f"V5.1 self-test passed: {len(cases)} classifier cases + URL identity test")
 
 
 def main() -> None:
@@ -4747,12 +4793,19 @@ def main() -> None:
     started = time.time()
 
     print()
-    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5")
+    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5.1")
     print(f"Companies/fallback sources: {len(COMPANIES)}")
     print(f"ATS API boards: {len(ATS_BOARDS)}")
     print(f"Global discovery: {'ON' if USE_GLOBAL_DISCOVERY else 'OFF'}")
     print(f"Search discovery: {'ON' if USE_SEARCH_DISCOVERY else 'OFF'}")
-    print(f"Playwright: {'ON' if USE_PLAYWRIGHT else 'OFF'}")
+    print(f"Company search discovery: {'ON' if USE_COMPANY_SEARCH_DISCOVERY else 'OFF'}")
+    print(f"Search engine mode: {SEARCH_ENGINE_MODE}")
+    print(f"Playwright: {'ON' if USE_PLAYWRIGHT else 'OFF'} (budget={PLAYWRIGHT_BUDGET})")
+    print(
+        f"Bounded fallback: pages/company={MAX_PAGES_PER_COMPANY}, "
+        f"job-links/company={MAX_JOB_LINKS_PER_COMPANY}, "
+        f"seconds/company={COMPANY_SCAN_SECONDS}"
+    )
     print(f"IAM minimum score: {IAM_MIN_SCORE}")
     print("UK scope: UK-wide / Remote / Hybrid / Onsite")
     print("Employment: Permanent-only; contract/fixed-term/temporary/interim excluded")
