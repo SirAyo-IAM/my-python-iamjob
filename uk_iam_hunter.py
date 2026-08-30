@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UK IAM / PAM JOB DISCOVERY ENGINE v3
+UK IAM / PAM JOB DISCOVERY ENGINE v4
 ====================================
 
 Purpose:
@@ -12,7 +12,9 @@ Purpose:
 - Crawl sitemaps without requiring lxml.
 - Handle JS-heavy sites when Playwright is installed.
 - UK-wide: London, regional UK, remote UK, hybrid UK and onsite UK.
-- Permanent-first: explicit contract/fixed-term/temporary roles are excluded.
+- Permanent-only: explicit contract/fixed-term/temporary/interim roles are excluded.
+- V4 high-precision relevance scoring prevents generic authentication/authorization pages from becoming IAM matches.
+- V4 validates real job titles and UK job-location evidence before a result is retained.
 - Does NOT use LinkedIn, Indeed, Reed or other job-board URLs as final results.
 - Produces uk_iam_results.csv exactly for the existing GitHub workflow.
 - Produces JSON and audit files.
@@ -30,6 +32,7 @@ Environment variables:
     GOOGLE_APPS_SCRIPT_URL
     GOOGLE_APPS_SCRIPT_TOKEN
     USE_PLAYWRIGHT=true/false
+    IAM_MIN_SCORE (optional, default 75)
 """
 
 from __future__ import annotations
@@ -76,6 +79,10 @@ MAX_SITEMAP_URLS = 2500
 USE_SEARCH_DISCOVERY = True
 MAX_SEARCH_RESULTS = 20
 SEARCH_QUERIES_PER_COMPANY = 16
+
+# High-precision V4 relevance threshold.
+IAM_MIN_SCORE = int(os.getenv("IAM_MIN_SCORE", "75"))
+HIGH_CONFIDENCE_SCORE = int(os.getenv("IAM_HIGH_CONFIDENCE_SCORE", "110"))
 
 # Browser rendering.
 USE_PLAYWRIGHT = os.getenv(
@@ -151,106 +158,133 @@ ATS_DOMAINS = {
 
 
 # ============================================================================
-# IAM / PAM MATCHING
+# IAM / PAM MATCHING - V4 HIGH PRECISION
 # ============================================================================
 
-ROLE_TERMS = [
-    "iam",
-    "iam engineer",
-    "iam analyst",
-    "iam architect",
-    "iam administrator",
-    "iam consultant",
-    "iam specialist",
-    "identity and access management",
-    "identity & access management",
-    "identity access management",
-    "identity access",
-    "identity & access",
-    "identity management",
-    "microsoft identity",
-    "workforce identity",
-    "customer identity",
-    "ciam",
-    "access management",
-    "access control",
-    "access administrator",
-    "access analyst",
-    "access engineer",
-    "identity engineer",
-    "identity architect",
-    "identity analyst",
-    "identity consultant",
-    "identity specialist",
-    "identity administrator",
-    "identity operations",
-    "identity lifecycle",
-    "identity provisioning",
-    "joiner mover leaver",
-    "joiner-mover-leaver",
-    "jml",
-    "identity security",
-    "identity governance",
-    "access governance",
-    "iga",
-    "privileged access management",
-    "privileged access",
-    "privileged identity",
-    "privileged account",
-    "pam",
-    "cyberark",
-    "sailpoint",
-    "beyondtrust",
-    "delinea",
-    "one identity",
-    "saviynt",
-    "okta",
-    "ping identity",
-    "pingfederate",
-    "forgerock",
-    "identitynow",
-    "identityiq",
-    "entra id",
-    "microsoft entra",
-    "azure ad",
-    "azure active directory",
-    "privileged identity management",
-    "pim",
-    "conditional access",
-    "access reviews",
-    "access certification",
-    "entitlement management",
-    "hashicorp vault",
-    "secrets management",
+# Terms in the TITLE are the strongest indicator that a vacancy is genuinely
+# IAM/PAM rather than a generic role whose page happens to contain words such
+# as "authentication" or "authorization".
+TITLE_SIGNAL_WEIGHTS = {
+    "identity and access management": 105,
+    "identity & access management": 105,
+    "identity access management": 105,
+    "iam engineer": 100,
+    "iam analyst": 95,
+    "iam architect": 100,
+    "iam administrator": 90,
+    "iam consultant": 95,
+    "iam specialist": 95,
+    "iam": 90,
+    "identity engineer": 100,
+    "identity architect": 100,
+    "identity analyst": 95,
+    "identity consultant": 95,
+    "identity specialist": 95,
+    "identity administrator": 90,
+    "identity operations": 85,
+    "identity security": 95,
+    "identity governance": 100,
+    "access governance": 95,
+    "access management": 85,
+    "access engineer": 85,
+    "access analyst": 80,
+    "access administrator": 80,
+    "privileged access management": 105,
+    "pam engineer": 100,
+    "pam analyst": 95,
+    "pam architect": 100,
+    "pam": 85,
+    "cyberark": 90,
+    "sailpoint": 90,
+    "saviynt": 90,
+    "beyondtrust": 85,
+    "delinea": 85,
+    "okta": 80,
+    "entra id": 80,
+    "microsoft entra": 80,
+    "azure ad": 75,
+    "identitynow": 85,
+    "identityiq": 85,
+    "ping identity": 80,
+    "pingfederate": 80,
+    "forgerock": 80,
+    "directory services": 70,
+    "single sign-on": 70,
+    "sso": 65,
+}
+
+# Body signals are grouped so synonyms do not artificially inflate scores.
+# Each group contributes at most once.
+BODY_SIGNAL_GROUPS = [
+    ("IAM", 45, [
+        "identity and access management", "identity & access management",
+        "identity access management", " iam ",
+    ]),
+    ("Identity Governance / IGA", 38, [
+        "identity governance", "access governance", " iga ", "sailpoint",
+        "saviynt", "identityiq", "identitynow", "access certification",
+        "access reviews", "entitlement management",
+    ]),
+    ("PAM", 42, [
+        "privileged access management", "privileged access",
+        "privileged identity", "cyberark", "beyondtrust", "delinea",
+        "secret server", "privileged account",
+    ]),
+    ("Okta", 26, ["okta"]),
+    ("Microsoft Identity", 28, [
+        "entra id", "microsoft entra", "azure ad", "azure active directory",
+        "conditional access", "privileged identity management",
+    ]),
+    ("Federation / SSO", 20, [
+        "single sign-on", " sso ", "saml", "openid connect", "oidc",
+        "federation", "oauth", "ws-federation", "pingfederate",
+    ]),
+    ("Provisioning / JML", 20, [
+        "joiner mover leaver", "joiner-mover-leaver", " jml ",
+        "provisioning", "deprovisioning", "identity lifecycle",
+        "lifecycle management",
+    ]),
+    ("Access Reviews", 24, [
+        "access review", "access reviews", "access certification",
+        "recertification", "entitlement review",
+    ]),
+    ("SCIM / Automation", 14, [
+        " scim ", "microsoft graph", "graph api", "identity automation",
+    ]),
+    ("RBAC / Least Privilege", 12, [
+        " rbac ", "role based access", "role-based access",
+        "least privilege", "access model",
+    ]),
+    ("Directory Services", 12, [
+        "active directory", "directory services", "ldap", "azure ad connect",
+    ]),
+    ("Secrets Management", 18, [
+        "hashicorp vault", "secrets management", "secret management",
+        "credential vault",
+    ]),
+]
+
+# These words occur on many unrelated websites and job adverts. They can be
+# recorded as context, but they are never sufficient to qualify a vacancy.
+WEAK_IAM_TERMS = [
     "authentication",
     "authorisation",
     "authorization",
-    "federation",
-    "single sign-on",
-    "sso",
+    "access control",
+    "security",
 ]
 
-
-ADJACENT_SECURITY_TERMS = [
-    "zero trust",
-    "rbac",
-    "cloud security",
+ADJACENT_TITLE_TERMS = [
     "security engineer",
     "security architect",
     "security consultant",
     "security analyst",
-    "information security",
-    "cyber security",
-    "cybersecurity",
+    "cloud security",
+    "platform security",
     "directory services",
     "active directory",
-    "microsoft graph",
-    "scim",
-    "provisioning",
-    "joiner mover leaver",
-    "jml",
+    "microsoft 365",
 ]
-
 
 EXCLUDED_TITLE_TERMS = [
     "internship",
@@ -263,20 +297,41 @@ EXCLUDED_TITLE_TERMS = [
     "recruitment coordinator",
 ]
 
+# Search/corporate/navigation pages must never become final vacancies.
+NON_JOB_TITLE_PATTERNS = [
+    r"^search jobs(?:\b|\s*-)",
+    r"^job search(?:\b|\s*-)",
+    r"^careers?$",
+    r"^careers? at ",
+    r"^jobs? at ",
+    r"^privacy (?:notice|statement|policy)",
+    r"^cookie (?:notice|policy)",
+    r"^terms (?:and|&) conditions",
+    r"^meet ",
+    r"^people$",
+    r"^marketing$",
+    r"^finance$",
+    r"^operations$",
+    r"^product$",
+    r"^tech$",
+    r"^culture(?: and| &)? ",
+    r"^faq(?:s)?$",
+    r"^home$",
+]
 
-# Explicitly non-permanent roles are excluded.
 NON_PERMANENT_TERMS = [
+    "contract",
     "contractor",
-    "contract role",
     "fixed term",
     "fixed-term",
     "temporary",
     "interim",
+    "freelance",
     "day rate",
     "daily rate",
-    "freelance",
+    "inside ir35",
+    "outside ir35",
 ]
-
 
 # ============================================================================
 # UK LOCATION
@@ -366,6 +421,31 @@ WORKING_TERMS = [
     "office based",
     "home based",
     "home-based",
+]
+
+# If an actual job-location field clearly points outside the UK, V4 rejects the
+# vacancy even when the global careers page contains UK text elsewhere.
+FOREIGN_LOCATION_TERMS = [
+    "united states", "usa", "u.s.a", "canada", "australia", "spain",
+    "germany", "france", "italy", "belgium", "netherlands", "vietnam",
+    "india", "singapore", "poland", "portugal", "switzerland", "austria",
+    "united arab emirates", "dubai", "barcelona", "madrid", "paris",
+    "berlin", "munich", "new york", "boston", "houston", "nashville",
+    "seattle", "san francisco", "sydney", "melbourne", "macquarie park",
+    "ho chi minh", "bengaluru", "bangalore", "mumbai", "hyderabad",
+]
+
+PLACEHOLDER_LOCATION_TERMS = [
+    "location city",
+    "state, country",
+    "city, state, country",
+    "near location",
+    "choose locations",
+    "select your preferred locations",
+    "our locations",
+    "locations",
+    "all",
+    "expand_more",
 ]
 
 
@@ -1104,25 +1184,15 @@ def keyword_present(keyword: str, text: str) -> bool:
     return keyword.lower() in low
 
 
-def matched_role_terms(text: str) -> List[str]:
-    found = []
-
-    for term in ROLE_TERMS:
-        if keyword_present(term, text):
-            found.append(term)
-
-    return found
+def matched_terms(text: str, terms: Iterable[str]) -> List[str]:
+    return [term for term in terms if keyword_present(term.strip(), text)]
 
 
 def contains_uk(text: str) -> bool:
-    low = text.lower()
+    low = (text or "").lower()
 
-    # Country codes commonly appear in ATS/JSON-LD location fields.
     for code in ("uk", "gb", "gbr"):
-        if re.search(
-            rf"(?<![a-z]){code}(?![a-z])",
-            low,
-        ):
+        if re.search(rf"(?<![a-z]){code}(?![a-z])", low):
             return True
 
     for term in UK_TERMS:
@@ -1132,6 +1202,164 @@ def contains_uk(text: str) -> bool:
             return True
 
     return False
+
+
+def is_placeholder_location(location: str) -> bool:
+    low = re.sub(r"\s+", " ", (location or "").strip().lower())
+    if not low:
+        return True
+    return low in PLACEHOLDER_LOCATION_TERMS or any(
+        term in low for term in [
+            "location city, state, country",
+            "location city state country",
+        ]
+    )
+
+
+def contains_foreign_location(location: str) -> bool:
+    low = (location or "").lower()
+    if contains_uk(low):
+        return False
+    return any(term in low for term in FOREIGN_LOCATION_TERMS)
+
+
+def evaluate_uk_location(
+    location: str,
+    description: str,
+    url: str,
+) -> Tuple[bool, str]:
+    location = (location or "").strip()
+
+    if location and not is_placeholder_location(location):
+        if contains_uk(location):
+            return True, f"job location: {location[:180]}"
+        if contains_foreign_location(location):
+            return False, f"foreign job location: {location[:180]}"
+
+    # Missing/placeholder/remote-only locations need explicit UK evidence in the
+    # job-specific text or URL. We intentionally use only the leading body text
+    # to reduce matches caused by global footer/navigation content.
+    body_head = (description or "")[:6000]
+    if contains_uk(body_head):
+        return True, "UK evidence in job description"
+
+    if contains_uk(url or ""):
+        return True, "UK evidence in job URL"
+
+    return False, "no job-specific UK evidence"
+
+
+def is_non_job_title(title: str) -> bool:
+    low = re.sub(r"\s+", " ", (title or "").strip().lower())
+    if not low:
+        return True
+
+    for pattern in NON_JOB_TITLE_PATTERNS:
+        if re.search(pattern, low, re.I):
+            return True
+
+    # Browser titles for result pages often append the employer name.
+    generic_fragments = [
+        "search jobs -",
+        "job search -",
+        "careers |",
+        "careers -",
+        "privacy notice |",
+        "privacy statement |",
+        "cookie notice |",
+    ]
+    return any(fragment in low for fragment in generic_fragments)
+
+
+def explicit_non_permanent(
+    title: str,
+    description: str,
+    employment_type: str = "",
+) -> bool:
+    title_low = (title or "").lower()
+    emp_low = (employment_type or "").lower()
+
+    if any(term in title_low for term in NON_PERMANENT_TERMS):
+        return True
+
+    if any(term in emp_low for term in [
+        "contract", "fixed", "temporary", "interim", "freelance"
+    ]):
+        return True
+
+    head = (description or "")[:3000].lower()
+    patterns = [
+        r"\b(?:employment type|job type|contract type)\s*[:\-]?\s*"
+        r"(?:contract|fixed[- ]term|temporary|interim|freelance)\b",
+        r"\b(?:contract|fixed[- ]term|temporary|interim)\s+"
+        r"(?:role|position|assignment|opportunity)\b",
+        r"\b\d{1,2}\s*(?:month|months)\s+(?:contract|ftc)\b",
+        r"\b(?:inside|outside)\s+ir35\b",
+        r"\b(?:day|daily)\s+rate\b",
+    ]
+    return any(re.search(pattern, head, re.I) for pattern in patterns)
+
+
+def score_iam_relevance(
+    title: str,
+    description: str,
+) -> Tuple[int, List[str], int, bool, bool]:
+    title_low = f" {title.lower()} "
+    body_low = f" {(description or '').lower()} "
+
+    title_hits: List[str] = []
+    title_score = 0
+
+    # Use the single strongest title signal plus a small bonus for additional
+    # independent title signals. This avoids overlapping synonyms exploding the
+    # score while preserving strong titles such as "SailPoint IAM Engineer".
+    title_candidates = []
+    for term, weight in TITLE_SIGNAL_WEIGHTS.items():
+        if keyword_present(term, title_low):
+            title_candidates.append((term, weight))
+
+    title_candidates.sort(key=lambda item: item[1], reverse=True)
+    if title_candidates:
+        title_score = title_candidates[0][1]
+        title_hits.append(title_candidates[0][0])
+        for term, weight in title_candidates[1:3]:
+            if term not in title_hits:
+                title_score += min(12, max(5, weight // 10))
+                title_hits.append(term)
+
+    body_hits: List[str] = []
+    body_score = 0
+    core_body_signals = 0
+
+    for label, weight, terms in BODY_SIGNAL_GROUPS:
+        hit = False
+        for term in terms:
+            needle = term.strip()
+            if keyword_present(needle, body_low):
+                hit = True
+                break
+        if hit:
+            body_score += weight
+            body_hits.append(label)
+            if weight >= 20:
+                core_body_signals += 1
+
+    weak_hits = [term for term in WEAK_IAM_TERMS if keyword_present(term, body_low)]
+    # Weak words contribute at most four points in total.
+    body_score += min(4, len(weak_hits))
+
+    adjacent_title = any(term in title_low for term in ADJACENT_TITLE_TERMS)
+    title_anchor = bool(title_candidates)
+
+    if adjacent_title and not title_anchor:
+        title_score += 10
+
+    score = title_score + body_score
+    keywords = title_hits + body_hits
+    if weak_hits and keywords:
+        keywords.extend(f"context:{term}" for term in weak_hits[:3])
+
+    return score, keywords, core_body_signals, title_anchor, adjacent_title
 
 
 def extract_working_arrangement(text: str) -> str:
@@ -1147,19 +1375,23 @@ def extract_working_arrangement(text: str) -> str:
 
 
 def extract_employment_type(text: str) -> str:
-    low = text.lower()
+    text = text or ""
+    head = text[:3500]
+    low = head.lower()
 
-    if "permanent" in low:
-        return "Permanent"
+    explicit_patterns = [
+        ("Fixed-term", r"\bfixed[- ]term\b"),
+        ("Contract", r"\b\d{1,2}\s*(?:month|months)\s+(?:contract|ftc)\b"),
+        ("Contract", r"\b(?:employment type|job type|contract type)\s*[:\-]?\s*contract\b"),
+        ("Temporary", r"\btemporary\s+(?:role|position|assignment)\b"),
+        ("Interim", r"\binterim\s+(?:role|position|assignment)\b"),
+        ("Permanent", r"\bpermanent\b"),
+        ("Full-time", r"\bfull[- ]time\b"),
+    ]
 
-    if "full-time" in low or "full time" in low:
-        return "Full-time"
-
-    if "fixed-term" in low or "fixed term" in low:
-        return "Fixed-term"
-
-    if "contract" in low:
-        return "Contract"
+    for label, pattern in explicit_patterns:
+        if re.search(pattern, low, re.I):
+            return label
 
     return ""
 
@@ -1266,70 +1498,64 @@ def is_target_job(
     description: str,
     location: str,
     url: str,
-) -> Tuple[bool, List[str]]:
-
-    combined = (
-        f"{title}\n"
-        f"{description}\n"
-        f"{location}\n"
-        f"{url}"
-    )
-
-    title_low = title.lower()
-    combined_low = combined.lower()
+    employment_type: str = "",
+) -> Tuple[bool, List[str], int, str, str]:
+    title = (title or "").strip()
+    description = description or ""
 
     if not title:
-        return False, []
+        return False, [], 0, "REJECTED", "missing title"
 
-    # Remove obvious non-jobs.
+    title_low = title.lower()
+
+    if is_non_job_title(title):
+        return False, [], 0, "REJECTED", "navigation/non-job page title"
+
     for excluded in EXCLUDED_TITLE_TERMS:
-
         if excluded in title_low:
-            return False, []
+            return False, [], 0, "REJECTED", f"excluded title term: {excluded}"
 
-    # Explicit non-permanent roles are not wanted, but do not reject a
-    # permanent role merely because its description mentions contractors.
-    title_non_perm = (
-        "contractor",
-        "contract role",
-        "fixed term",
-        "fixed-term",
-        "temporary",
-        "interim",
-        "freelance",
+    if explicit_non_permanent(title, description, employment_type):
+        return False, [], 0, "REJECTED", "explicit non-permanent employment"
+
+    uk_ok, uk_evidence = evaluate_uk_location(location, description, url)
+    if not uk_ok:
+        return False, [], 0, "REJECTED", uk_evidence
+
+    score, keywords, core_body_signals, title_anchor, adjacent_title = (
+        score_iam_relevance(title, description)
     )
 
-    if any(term in title_low for term in title_non_perm):
-        return False, []
+    # Qualification gates:
+    # 1) Strong IAM title -> normal threshold.
+    # 2) Security-adjacent title -> at least two core IAM body groups.
+    # 3) Generic title -> at least three core IAM groups and a higher score.
+    if title_anchor:
+        matched = score >= IAM_MIN_SCORE
+    elif adjacent_title:
+        matched = score >= max(IAM_MIN_SCORE, 80) and core_body_signals >= 2
+    else:
+        matched = score >= max(IAM_MIN_SCORE, 90) and core_body_signals >= 3
 
-    employment_head = f"{title}\n{description[:1800]}\n{location}".lower()
-    non_perm_patterns = [
-        r"\b(?:employment type|job type|contract type)\s*[:\-]?\s*"
-        r"(?:contract|fixed[- ]term|temporary|interim|freelance)\b",
-        r"\b(?:contract|fixed[- ]term|temporary|interim)\s+"
-        r"(?:role|position|assignment)\b",
-        r"\b\d{1,2}\s*(?:month|months)\s+(?:contract|ftc)\b",
-        r"\b(?:inside|outside)\s+ir35\b",
-        r"\b(?:day|daily)\s+rate\b",
-    ]
+    if not matched:
+        reason = (
+            f"IAM score {score} below qualification gate; "
+            f"core body signals={core_body_signals}"
+        )
+        return False, keywords, score, "REJECTED", reason
 
-    if any(re.search(pattern, employment_head, re.I) for pattern in non_perm_patterns):
-        return False, []
+    confidence = "HIGH" if score >= HIGH_CONFIDENCE_SCORE else "MEDIUM"
+    reason = (
+        f"{confidence} IAM match; score={score}; "
+        f"core body signals={core_body_signals}; {uk_evidence}"
+    )
 
-    role_hits = matched_role_terms(combined)
-
-    if not role_hits:
-        return False, []
-
-    # UK evidence must exist somewhere in the job record.
-    if not contains_uk(combined):
-        return False, role_hits
-
-    return True, role_hits
+    return True, keywords, score, confidence, reason
 
 
 # ============================================================================
 # JSON-LD EXTRACTION
+
 # ============================================================================
 
 def extract_jsonld_jobs(
@@ -2346,108 +2572,64 @@ def build_result(
     salary: str = "",
 ) -> Optional[Dict[str, Any]]:
 
-    title = re.sub(
-        r"\s+",
-        " ",
-        title or "",
-    ).strip()
-
-    description = re.sub(
-        r"\s+",
-        " ",
-        description or "",
-    ).strip()
-
-    location = re.sub(
-        r"\s+",
-        " ",
-        location or "",
-    ).strip()
-
-    original_url = normalise_url(
-        url
-    )
+    title = re.sub(r"\s+", " ", title or "").strip()
+    description = re.sub(r"\s+", " ", description or "").strip()
+    location = re.sub(r"\s+", " ", location or "").strip()
+    original_url = normalise_url(url)
 
     if not title or not original_url:
         return None
 
-    matched, keywords = is_target_job(
-        title,
-        description,
-        location,
-        original_url,
+    full_text = f"{title} {description} {location}"
+
+    if not employment_type:
+        employment_type = extract_employment_type(full_text)
+
+    matched, keywords, score, confidence, match_reason = is_target_job(
+        title=title,
+        description=description,
+        location=location,
+        url=original_url,
+        employment_type=employment_type,
     )
 
     if not matched:
         return None
 
-    if not allowed_result_url(
-        original_url,
-        company,
-    ):
+    if not allowed_result_url(original_url, company):
         return None
 
-    full_text = (
-        f"{title} "
-        f"{description} "
-        f"{location}"
-    )
-
     if not salary:
-        salary = extract_salary(
-            full_text
-        )
+        salary = extract_salary(full_text)
 
     if not date_posted:
-        date_posted = extract_posted_date(
-            full_text
-        )
+        date_posted = extract_posted_date(full_text)
 
-    if not employment_type:
-        employment_type = (
-            extract_employment_type(
-                full_text
-            )
-        )
-
-    arrangement = (
-        extract_working_arrangement(
-            full_text
-        )
-    )
+    arrangement = extract_working_arrangement(full_text)
 
     return {
         "company": company[0],
         "title": title,
-        "location": (
-            location
-            or "UK location not specified"
-        ),
+        "location": location or "UK location not specified",
         "working_arrangement": arrangement,
         "employment_type": employment_type,
         "salary": salary,
         "date_posted": date_posted,
-        "job_reference": extract_reference(
-            full_text
-        ),
-        "matched_keywords": ", ".join(
-            keywords
-        ),
+        "job_reference": extract_reference(full_text),
+        "match_score": score,
+        "confidence": confidence,
+        "match_reason": match_reason,
+        "matched_keywords": ", ".join(keywords),
         "source_method": method,
         "url": original_url,
-        "canonical_url": canonical_url(
-            original_url
-        ),
-        "discovered_at": (
-            datetime.now(
-                timezone.utc
-            ).isoformat()
-        ),
+        "canonical_url": canonical_url(original_url),
+        "discovered_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 # ============================================================================
 # COMPANY CRAWLER
+
 # ============================================================================
 
 def crawl_company(
@@ -3584,7 +3766,10 @@ def archive_to_google(
                 "",
             ),
 
-            "match_score": "",
+            "match_score": job.get(
+                "match_score",
+                "",
+            ),
 
             "outcome": "",
 
@@ -3620,6 +3805,9 @@ RESULT_FIELDS = [
     "salary",
     "date_posted",
     "job_reference",
+    "match_score",
+    "confidence",
+    "match_reason",
     "matched_keywords",
     "source_method",
     "url",
@@ -3897,7 +4085,7 @@ def main() -> None:
 
     print()
     print(
-        "🚀 UK IAM / PAM JOB DISCOVERY ENGINE v3"
+        "🚀 UK IAM / PAM JOB DISCOVERY ENGINE v4"
     )
 
     print(
@@ -3923,8 +4111,8 @@ def main() -> None:
     )
 
     print(
-        "Employment: Permanent-first; "
-        "explicit contract/fixed-term roles excluded"
+        "Employment: Permanent-only; "
+        "contract/fixed-term/temporary/interim roles excluded"
     )
 
     print()
@@ -4093,29 +4281,12 @@ def main() -> None:
         all_results
     )
 
-    # Highest number of IAM signals first.
+    # Highest-confidence IAM vacancies first.
     all_results.sort(
         key=lambda item: (
-            -len(
-                item.get(
-                    "matched_keywords",
-                    "",
-                ).split(",")
-            )
-            if item.get(
-                "matched_keywords"
-            )
-            else 0,
-
-            item.get(
-                "company",
-                "",
-            ).lower(),
-
-            item.get(
-                "title",
-                "",
-            ).lower(),
+            -int(item.get("match_score", 0) or 0),
+            item.get("company", "").lower(),
+            item.get("title", "").lower(),
         )
     )
 
@@ -4132,8 +4303,16 @@ def main() -> None:
 
     archived = 0
 
+    if ARCHIVE_TO_GOOGLE and not GOOGLE_APPS_SCRIPT_URL:
+        print()
+        print(
+            "⚠ Google archive requested, but GOOGLE_APPS_SCRIPT_URL is missing. "
+            "Set GOOGLE_APPS_SCRIPT_URL and GOOGLE_APPS_SCRIPT_TOKEN as GitHub secrets/env vars."
+        )
+
     if (
         ARCHIVE_TO_GOOGLE
+        and GOOGLE_APPS_SCRIPT_URL
         and all_results
     ):
 
