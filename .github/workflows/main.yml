@@ -12,31 +12,55 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       # ---------------------------------------------------------
       # 1. CHECKOUT REPOSITORY
       # ---------------------------------------------------------
       - name: Get repository
         uses: actions/checkout@v4
 
-
       # ---------------------------------------------------------
       # 2. SET UP PYTHON
+      # IMPORTANT: no pip cache is enabled here.
+      # This avoids setup-python looking for requirements.txt or
+      # pyproject.toml when those files do not exist.
       # ---------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
-
 
       # ---------------------------------------------------------
-      # 3. INSTALL ALL REQUIRED PYTHON LIBRARIES
+      # 3. VERIFY REQUIRED REPOSITORY FILES EXIST
+      # ---------------------------------------------------------
+      - name: Verify repository files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Repository contents:"
+          ls -la
+
+          test -f uk_iam_job_hunter_v3_fixed.py || {
+            echo "ERROR: uk_iam_job_hunter_v3_fixed.py was not found in the repository root."
+            exit 1
+          }
+
+          test -f send_email.py || {
+            echo "ERROR: send_email.py was not found in the repository root."
+            exit 1
+          }
+
+          echo "Required Python files found."
+
+      # ---------------------------------------------------------
+      # 4. INSTALL REQUIRED PYTHON LIBRARIES
       # ---------------------------------------------------------
       - name: Install Python dependencies
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
+          set -euo pipefail
 
+          python -m pip install --upgrade pip
           python -m pip install \
             requests \
             beautifulsoup4 \
@@ -44,21 +68,25 @@ jobs:
             rich \
             playwright
 
-
       # ---------------------------------------------------------
-      # 4. INSTALL PLAYWRIGHT CHROMIUM + SYSTEM DEPENDENCIES
+      # 5. INSTALL PLAYWRIGHT CHROMIUM + SYSTEM DEPENDENCIES
       # ---------------------------------------------------------
       - name: Install Playwright Chromium
+        shell: bash
         run: |
+          set -euo pipefail
           python -m playwright install --with-deps chromium
 
-
       # ---------------------------------------------------------
-      # 5. VERIFY EVERYTHING IS INSTALLED
+      # 6. VERIFY PYTHON ENVIRONMENT + COMPILE SCRIPTS
       # ---------------------------------------------------------
       - name: Verify Python environment
+        shell: bash
         run: |
+          set -euo pipefail
+
           python --version
+          python -m pip --version
 
           python - <<'PY'
           import requests
@@ -76,50 +104,67 @@ jobs:
 
           python -m playwright --version
 
+          echo "Checking Python syntax..."
+          python -m py_compile uk_iam_job_hunter_v3_fixed.py
+          python -m py_compile send_email.py
+          echo "Python syntax: OK"
 
       # ---------------------------------------------------------
-      # 6. RUN IAM JOB DISCOVERY ENGINE
+      # 7. RUN IAM JOB DISCOVERY ENGINE V3
       # ---------------------------------------------------------
       - name: Run UK IAM Hunter
         env:
           USE_PLAYWRIGHT: "true"
           ARCHIVE_TO_GOOGLE: "true"
+        shell: bash
         run: |
-          python uk_iam_job_hunter_v2.py
-
+          set -euo pipefail
+          python uk_iam_job_hunter_v3_fixed.py
 
       # ---------------------------------------------------------
-      # 7. VERIFY OUTPUT FILES
+      # 8. VERIFY OUTPUT FILES
       # ---------------------------------------------------------
       - name: Check results
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "Checking generated files..."
 
-          if [ ! -f uk_iam_results.csv ]; then
+          test -f uk_iam_results.csv || {
             echo "ERROR: uk_iam_results.csv was not created"
             exit 1
-          fi
+          }
 
-          if [ ! -f uk_iam_results.json ]; then
+          test -f uk_iam_results.json || {
             echo "ERROR: uk_iam_results.json was not created"
             exit 1
-          fi
+          }
+
+          test -f uk_iam_source_audit.csv || {
+            echo "ERROR: uk_iam_source_audit.csv was not created"
+            exit 1
+          }
+
+          test -f uk_iam_run_log.csv || {
+            echo "ERROR: uk_iam_run_log.csv was not created"
+            exit 1
+          }
 
           echo ""
-          echo "CSV found:"
-          ls -lh uk_iam_results.csv
+          echo "Generated files:"
+          ls -lh \
+            uk_iam_results.csv \
+            uk_iam_results.json \
+            uk_iam_source_audit.csv \
+            uk_iam_run_log.csv
 
           echo ""
-          echo "JSON found:"
-          ls -lh uk_iam_results.json
-
-          echo ""
-          echo "Number of CSV lines:"
+          echo "Number of result CSV lines:"
           wc -l uk_iam_results.csv
 
-
       # ---------------------------------------------------------
-      # 8. UPLOAD RESULTS
+      # 9. UPLOAD RESULTS
       # ---------------------------------------------------------
       - name: Upload job results
         uses: actions/upload-artifact@v4
@@ -129,17 +174,19 @@ jobs:
             uk_iam_results.csv
             uk_iam_results.json
             uk_iam_source_audit.csv
-            uk_iam_run_log.json
-          if-no-files-found: warn
-
+            uk_iam_run_log.csv
+          if-no-files-found: error
+          retention-days: 14
 
       # ---------------------------------------------------------
-      # 9. SEND EMAIL REPORT
+      # 10. SEND EMAIL REPORT
       # ---------------------------------------------------------
       - name: Send email
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+        shell: bash
         run: |
+          set -euo pipefail
           python send_email.py
