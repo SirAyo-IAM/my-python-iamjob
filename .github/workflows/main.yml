@@ -20,7 +20,6 @@ jobs:
 
       # ---------------------------------------------------------
       # 2. SET UP PYTHON
-      # No pip cache: avoids requirements.txt/pyproject.toml error.
       # ---------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,7 +27,7 @@ jobs:
           python-version: "3.12"
 
       # ---------------------------------------------------------
-      # 3. VERIFY REQUIRED REPOSITORY FILES EXIST
+      # 3. VERIFY REPOSITORY FILES + CONFIRM V5
       # ---------------------------------------------------------
       - name: Verify repository files
         shell: bash
@@ -38,8 +37,8 @@ jobs:
           echo "Repository contents:"
           ls -la
 
-          test -f uk_iam_hunter_v5.py || {
-            echo "ERROR: uk_iam_hunter_v5.py was not found in the repository root."
+          test -f uk_iam_hunter.py || {
+            echo "ERROR: uk_iam_hunter.py was not found in the repository root."
             exit 1
           }
 
@@ -48,18 +47,22 @@ jobs:
             exit 1
           }
 
-          echo "Checking hunter version..."
-          grep -q "UK IAM / PAM JOB DISCOVERY ENGINE v5" uk_iam_hunter_v5.py || {
-            echo "ERROR: uk_iam_hunter_v5.py is not the V5 engine."
-            echo "Detected banner lines:"
-            grep -n "DISCOVERY ENGINE v" uk_iam_hunter_v5.py || true
-            exit 1
-          }
+          echo ""
+          echo "Checking that uk_iam_hunter.py is V5..."
 
-          echo "Required files found and V5 engine confirmed."
+          if ! grep -q "UK IAM / PAM JOB DISCOVERY ENGINE v5" uk_iam_hunter.py; then
+            echo "ERROR: uk_iam_hunter.py exists, but it is not the V5 engine."
+            echo ""
+            echo "Detected version references:"
+            grep -niE "JOB DISCOVERY ENGINE v[0-9]+|JOB HUNTER v[0-9]+" uk_iam_hunter.py | head -20 || true
+            exit 1
+          fi
+
+          echo "V5 engine confirmed."
+          echo "Required repository files found."
 
       # ---------------------------------------------------------
-      # 4. INSTALL REQUIRED PYTHON LIBRARIES
+      # 4. INSTALL PYTHON DEPENDENCIES
       # ---------------------------------------------------------
       - name: Install Python dependencies
         shell: bash
@@ -67,15 +70,11 @@ jobs:
           set -euo pipefail
 
           python -m pip install --upgrade pip
-          python -m pip install \
-            requests \
-            beautifulsoup4 \
-            lxml \
-            rich \
-            playwright
+
+          python -m pip install             requests             beautifulsoup4             lxml             rich             playwright
 
       # ---------------------------------------------------------
-      # 5. INSTALL PLAYWRIGHT CHROMIUM + SYSTEM DEPENDENCIES
+      # 5. INSTALL PLAYWRIGHT CHROMIUM
       # ---------------------------------------------------------
       - name: Install Playwright Chromium
         shell: bash
@@ -84,7 +83,7 @@ jobs:
           python -m playwright install --with-deps chromium
 
       # ---------------------------------------------------------
-      # 6. VERIFY PYTHON ENVIRONMENT + COMPILE SCRIPTS
+      # 6. VERIFY PYTHON ENVIRONMENT
       # ---------------------------------------------------------
       - name: Verify Python environment
         shell: bash
@@ -110,19 +109,22 @@ jobs:
 
           python -m playwright --version
 
+          echo ""
           echo "Checking Python syntax..."
-          python -m py_compile uk_iam_hunter_v5.py
+          python -m py_compile uk_iam_hunter.py
           python -m py_compile send_email.py
           echo "Python syntax: OK"
 
       # ---------------------------------------------------------
-      # 7. RUN V5 OFFLINE REGRESSION TESTS
+      # 7. RUN V5 SELF-TEST
       # ---------------------------------------------------------
-      - name: Test V5 matching logic
+      - name: Run V5 regression tests
         shell: bash
         run: |
           set -euo pipefail
-          python uk_iam_hunter_v5.py --self-test
+
+          echo "Running V5 self-test..."
+          python uk_iam_hunter.py --self-test
 
       # ---------------------------------------------------------
       # 8. RUN IAM JOB DISCOVERY ENGINE V5
@@ -130,22 +132,20 @@ jobs:
       - name: Run UK IAM Hunter V5
         env:
           USE_PLAYWRIGHT: "true"
-          USE_GLOBAL_DISCOVERY: "true"
           IAM_MIN_SCORE: "75"
-          GLOBAL_SEARCH_QUERY_LIMIT: "18"
-          MAX_GLOBAL_CANDIDATES: "320"
-          # Optional. Leave the GitHub secret unset if you do not use Brave Search API.
-          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
           ARCHIVE_TO_GOOGLE: "true"
           GOOGLE_APPS_SCRIPT_URL: ${{ secrets.GOOGLE_APPS_SCRIPT_URL }}
           GOOGLE_APPS_SCRIPT_TOKEN: ${{ secrets.GOOGLE_APPS_SCRIPT_TOKEN }}
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          python uk_iam_hunter_v5.py
+
+          echo "Starting V5 live scan..."
+          python uk_iam_hunter.py
 
       # ---------------------------------------------------------
-      # 9. VERIFY OUTPUT FILES
+      # 9. VERIFY GENERATED OUTPUT FILES
       # ---------------------------------------------------------
       - name: Check results
         shell: bash
@@ -176,11 +176,7 @@ jobs:
 
           echo ""
           echo "Generated files:"
-          ls -lh \
-            uk_iam_results.csv \
-            uk_iam_results.json \
-            uk_iam_source_audit.csv \
-            uk_iam_run_log.csv
+          ls -lh             uk_iam_results.csv             uk_iam_results.json             uk_iam_source_audit.csv             uk_iam_run_log.csv
 
           echo ""
           echo "Number of result CSV lines:"
@@ -192,7 +188,7 @@ jobs:
       - name: Upload job results
         uses: actions/upload-artifact@v4
         with:
-          name: uk-iam-results
+          name: uk-iam-results-v5
           path: |
             uk_iam_results.csv
             uk_iam_results.json
