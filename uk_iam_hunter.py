@@ -75,7 +75,7 @@ MAX_SITEMAP_URLS = 2500
 # Search engine discovery.
 USE_SEARCH_DISCOVERY = True
 MAX_SEARCH_RESULTS = 20
-SEARCH_QUERIES_PER_COMPANY = 12
+SEARCH_QUERIES_PER_COMPANY = 16
 
 # Browser rendering.
 USE_PLAYWRIGHT = os.getenv(
@@ -93,14 +93,12 @@ ARCHIVE_TO_GOOGLE = os.getenv(
 
 GOOGLE_APPS_SCRIPT_URL = os.getenv(
     "GOOGLE_APPS_SCRIPT_URL",
-    "https://script.google.com/macros/s/"
-    "AKfycbzAxS5Keh8vArI6xXwWc-SmU6DN-FkTcKDVONmEMCLdfxgrQR-vPoDfloxGK8Z0MVBssg/"
-    "exec"
+    ""
 )
 
 GOOGLE_APPS_SCRIPT_TOKEN = os.getenv(
     "GOOGLE_APPS_SCRIPT_TOKEN",
-    "IAMJOBSEARCHAUGUST2026"
+    ""
 )
 
 CSV_FILE = "uk_iam_results.csv"
@@ -158,10 +156,27 @@ ATS_DOMAINS = {
 
 ROLE_TERMS = [
     "iam",
+    "iam engineer",
+    "iam analyst",
+    "iam architect",
+    "iam administrator",
+    "iam consultant",
+    "iam specialist",
     "identity and access management",
     "identity & access management",
+    "identity access management",
+    "identity access",
+    "identity & access",
     "identity management",
+    "microsoft identity",
+    "workforce identity",
+    "customer identity",
+    "ciam",
     "access management",
+    "access control",
+    "access administrator",
+    "access analyst",
+    "access engineer",
     "identity engineer",
     "identity architect",
     "identity analyst",
@@ -169,6 +184,11 @@ ROLE_TERMS = [
     "identity specialist",
     "identity administrator",
     "identity operations",
+    "identity lifecycle",
+    "identity provisioning",
+    "joiner mover leaver",
+    "joiner-mover-leaver",
+    "jml",
     "identity security",
     "identity governance",
     "access governance",
@@ -264,7 +284,11 @@ NON_PERMANENT_TERMS = [
 
 UK_TERMS = [
     "united kingdom",
+    "great britain",
     "u.k.",
+    "uk",
+    "gb",
+    "gbr",
     "england",
     "scotland",
     "wales",
@@ -1003,7 +1027,7 @@ def fetch(
             allow_redirects=True,
         )
 
-        if response.status_code >= 500:
+        if response.status_code >= 400:
             return None
 
         return response
@@ -1093,17 +1117,18 @@ def matched_role_terms(text: str) -> List[str]:
 def contains_uk(text: str) -> bool:
     low = text.lower()
 
+    # Country codes commonly appear in ATS/JSON-LD location fields.
+    for code in ("uk", "gb", "gbr"):
+        if re.search(
+            rf"(?<![a-z]){code}(?![a-z])",
+            low,
+        ):
+            return True
+
     for term in UK_TERMS:
-
-        if term == "uk":
-
-            if re.search(
-                r"(?<![a-z])uk(?![a-z])",
-                low,
-            ):
-                return True
-
-        elif term in low:
+        if term in {"uk", "gb", "gbr"}:
+            continue
+        if term in low:
             return True
 
     return False
@@ -1262,11 +1287,34 @@ def is_target_job(
         if excluded in title_low:
             return False, []
 
-    # Explicit non-permanent roles are not wanted.
-    for excluded in NON_PERMANENT_TERMS:
+    # Explicit non-permanent roles are not wanted, but do not reject a
+    # permanent role merely because its description mentions contractors.
+    title_non_perm = (
+        "contractor",
+        "contract role",
+        "fixed term",
+        "fixed-term",
+        "temporary",
+        "interim",
+        "freelance",
+    )
 
-        if excluded in combined_low:
-            return False, []
+    if any(term in title_low for term in title_non_perm):
+        return False, []
+
+    employment_head = f"{title}\n{description[:1800]}\n{location}".lower()
+    non_perm_patterns = [
+        r"\b(?:employment type|job type|contract type)\s*[:\-]?\s*"
+        r"(?:contract|fixed[- ]term|temporary|interim|freelance)\b",
+        r"\b(?:contract|fixed[- ]term|temporary|interim)\s+"
+        r"(?:role|position|assignment)\b",
+        r"\b\d{1,2}\s*(?:month|months)\s+(?:contract|ftc)\b",
+        r"\b(?:inside|outside)\s+ir35\b",
+        r"\b(?:day|daily)\s+rate\b",
+    ]
+
+    if any(re.search(pattern, employment_head, re.I) for pattern in non_perm_patterns):
+        return False, []
 
     role_hits = matched_role_terms(combined)
 
@@ -2080,52 +2128,51 @@ def build_search_queries(
     company: Tuple[str, List[str], List[str]],
 ) -> List[str]:
 
-    domain = company[1][0]
+    name, domains, _ = company
 
-    terms = [
-        '"IAM"',
-        '"Identity and Access Management"',
-        '"IAM Engineer"',
-        '"Identity Engineer"',
-        '"Identity Analyst"',
-        '"Identity Architect"',
-        '"Identity Security"',
-        '"Identity Governance"',
-        '"Privileged Access Management"',
-        '"PAM"',
-        '"CyberArk"',
-        '"SailPoint"',
-        '"Saviynt"',
-        '"Okta"',
-        '"Entra ID"',
-        '"Microsoft Entra"',
-        '"Azure AD"',
-        '"Access Management"',
-        '"Access Governance"',
-        '"Privileged Access"',
-        '"Security Engineer" IAM',
-        '"Cloud Security" IAM',
-        '"Zero Trust" IAM',
+    # Group related terms so the query budget covers the whole IAM landscape
+    # instead of truncating the list before Okta/Entra/Saviynt searches run.
+    groups = [
+        '("IAM" OR "Identity and Access Management" OR "Identity Engineer" OR "Identity Analyst")',
+        '("Identity Governance" OR "Access Governance" OR IGA OR SailPoint OR Saviynt)',
+        '("Privileged Access Management" OR PAM OR CyberArk OR BeyondTrust OR Delinea)',
+        '(Okta OR "Entra ID" OR "Microsoft Entra" OR "Azure AD" OR SSO OR federation)',
+        '("Access Management" OR "Access Reviews" OR "Access Certification" OR "Entitlement Management")',
+        '("Identity Security" OR "Zero Trust" OR "Privileged Identity" OR PIM)',
     ]
+
+    uk_scope = (
+        '(UK OR "United Kingdom" OR "Great Britain" OR London OR England OR '
+        'Scotland OR Wales OR "Northern Ireland" OR remote OR hybrid)'
+    )
+
+    job_scope = (
+        '(job OR jobs OR careers OR vacancy OR position OR opportunity OR recruitment)'
+    )
 
     queries = []
 
-    for term in terms:
+    # Search official company domains. Use up to two domains where supplied.
+    for domain in domains[:2]:
+        for group in groups[:4]:
+            queries.append(
+                f'site:{domain} {group} {uk_scope} {job_scope}'
+            )
 
+    # Search common external ATS hosts by company name. A pure site:<company>
+    # search cannot discover Workday/Greenhouse/Lever pages hosted elsewhere.
+    ats_scope = (
+        '(site:myworkdayjobs.com OR site:greenhouse.io OR site:lever.co OR '
+        'site:smartrecruiters.com OR site:ashbyhq.com OR site:teamtailor.com OR '
+        'site:icims.com OR site:successfactors.com OR site:oraclecloud.com)'
+    )
+
+    for group in groups:
         queries.append(
-            f'site:{domain} '
-            f'{term} '
-            f'(UK OR "United Kingdom" OR '
-            f'London OR England OR Scotland OR '
-            f'Wales OR "Northern Ireland" OR '
-            f'remote OR hybrid) '
-            f'(job OR jobs OR careers OR vacancy OR '
-            f'position OR opportunity OR recruitment)'
+            f'"{name}" {group} {uk_scope} {ats_scope}'
         )
 
-    return queries[
-        :SEARCH_QUERIES_PER_COMPANY
-    ]
+    return list(dict.fromkeys(queries))[:SEARCH_QUERIES_PER_COMPANY]
 
 
 # ============================================================================
@@ -2763,8 +2810,7 @@ def crawl_company(
                     final_url,
                 ),
                 method=(
-                    f"{ats_platform(final_url) "
-                    f"or 'Corporate'} -> "
+                    f"{ats_platform(final_url) or 'Corporate'} -> "
                     "JSON-LD JobPosting"
                 ),
                 date_posted=job.get(
@@ -2966,8 +3012,7 @@ def crawl_company(
                             final_url,
                         ),
                         method=(
-                            f"{ats_platform(final_url) "
-                            f"or 'Corporate'} -> "
+                            f"{ats_platform(final_url) or 'Corporate'} -> "
                             "JobPosting"
                         ),
                         date_posted=job.get(
@@ -3015,8 +3060,7 @@ def crawl_company(
                 location=location,
                 url=final_url,
                 method=(
-                    f"{ats_platform(final_url) "
-                    f"or 'Corporate'} -> "
+                    f"{ats_platform(final_url) or 'Corporate'} -> "
                     "HTML Job Page"
                 ),
             )
@@ -3410,8 +3454,20 @@ def deduplicate(
             ).lower(),
         ).strip()
 
+        location = re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            item.get("location", "").lower(),
+        ).strip()
+
+        reference = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            item.get("job_reference", "").lower(),
+        ).strip()
+
         fuzzy_key = (
-            f"{company}|{title}"
+            f"{company}|{title}|{reference or location}"
         )
 
         # URL is strongest.
