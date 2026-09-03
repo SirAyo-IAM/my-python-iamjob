@@ -1,4 +1,4 @@
-name: Run UK IAM Hunter
+name: Run UK IAM Hunter V5.3
 
 on:
   workflow_dispatch:
@@ -10,136 +10,258 @@ on:
 jobs:
   run-python:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
 
     steps:
-
-      # ---------------------------------------------------------
-      # 1. CHECKOUT REPOSITORY
-      # ---------------------------------------------------------
       - name: Get repository
         uses: actions/checkout@v4
 
-
-      # ---------------------------------------------------------
-      # 2. SET UP PYTHON
-      # ---------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
 
+      - name: Verify repository files
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      # ---------------------------------------------------------
-      # 3. INSTALL ALL REQUIRED PYTHON LIBRARIES
-      # ---------------------------------------------------------
+          echo "Repository contents:"
+          ls -la
+
+          test -f uk_iam_hunter.py || {
+            echo "ERROR: uk_iam_hunter.py was not found."
+            exit 1
+          }
+
+          test -f send_email.py || {
+            echo "ERROR: send_email.py was not found."
+            exit 1
+          }
+
+          echo ""
+          echo "Checking V5.3 engine..."
+
+          if ! grep -q "UK IAM / PAM JOB DISCOVERY ENGINE v5.3" uk_iam_hunter.py; then
+            echo "ERROR: uk_iam_hunter.py is not V5.3."
+            echo "Detected version references:"
+            grep -niE "JOB DISCOVERY ENGINE v[0-9]+(\.[0-9]+)?|JOB HUNTER v[0-9]+" uk_iam_hunter.py | head -20 || true
+            exit 1
+          fi
+
+          echo "V5.3 engine confirmed."
+
       - name: Install Python dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
+          python -m pip install requests beautifulsoup4 lxml rich
 
-          python -m pip install \
-            requests \
-            beautifulsoup4 \
-            lxml \
-            rich \
-            playwright
-
-
-      # ---------------------------------------------------------
-      # 4. INSTALL PLAYWRIGHT CHROMIUM + SYSTEM DEPENDENCIES
-      # ---------------------------------------------------------
-      - name: Install Playwright Chromium
-        run: |
-          python -m playwright install --with-deps chromium
-
-
-      # ---------------------------------------------------------
-      # 5. VERIFY EVERYTHING IS INSTALLED
-      # ---------------------------------------------------------
       - name: Verify Python environment
+        shell: bash
         run: |
+          set -euo pipefail
+
           python --version
+          python -m pip --version
 
           python - <<'PY'
           import requests
           import bs4
           import lxml
           import rich
-          import playwright
 
           print("requests: OK")
           print("beautifulsoup4: OK")
           print("lxml: OK")
           print("rich: OK")
-          print("playwright: OK")
           PY
 
-          python -m playwright --version
+          echo "Checking Python syntax..."
+          python -m py_compile uk_iam_hunter.py
+          python -m py_compile send_email.py
+          echo "Python syntax: OK"
 
+      - name: Run V5.3 regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python uk_iam_hunter.py --self-test
 
-      # ---------------------------------------------------------
-      # 6. RUN IAM JOB DISCOVERY ENGINE
-      # ---------------------------------------------------------
-      - name: Run UK IAM Hunter
+      - name: Run UK IAM Hunter V5.3
         env:
-          USE_PLAYWRIGHT: "true"
+          IAM_MIN_SCORE: "75"
+
+          # Bounded CI mode.
+          IAM_MAX_WORKERS: "8"
+          IAM_REQUEST_TIMEOUT: "12"
+          IAM_SEARCH_TIMEOUT: "8"
+          IAM_JOB_TIMEOUT: "12"
+          IAM_MAX_PAGES_PER_COMPANY: "6"
+          IAM_MAX_JOB_LINKS_PER_COMPANY: "40"
+          IAM_MAX_SITEMAP_URLS: "500"
+          IAM_COMPANY_SCAN_SECONDS: "75"
+
+          # Open-ended discovery remains enabled.
+          USE_GLOBAL_DISCOVERY: "true"
+          USE_SEARCH_DISCOVERY: "true"
+          GLOBAL_SEARCH_QUERY_LIMIT: "12"
+          MAX_GLOBAL_CANDIDATES: "140"
+          MAX_LISTING_LINKS: "60"
+
+          # Avoid repeated search-engine queries for every fallback company.
+          USE_COMPANY_SEARCH_DISCOVERY: "false"
+
+          # CI-safe search discovery.
+          SEARCH_ENGINE_MODE: "light"
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+
+          # Browser rendering stays off in bounded mode.
+          USE_PLAYWRIGHT: "false"
+          IAM_PLAYWRIGHT_BUDGET: "10"
+
           ARCHIVE_TO_GOOGLE: "true"
+          GOOGLE_APPS_SCRIPT_URL: ${{ secrets.GOOGLE_APPS_SCRIPT_URL }}
+          GOOGLE_APPS_SCRIPT_TOKEN: ${{ secrets.GOOGLE_APPS_SCRIPT_TOKEN }}
+
+        shell: bash
         run: |
-          python uk_iam_job_hunter_v2.py
+          set -euo pipefail
+          python uk_iam_hunter.py
 
-
-      # ---------------------------------------------------------
-      # 7. VERIFY OUTPUT FILES
-      # ---------------------------------------------------------
-      - name: Check results
+      - name: Check V5.3 results
+        shell: bash
         run: |
-          echo "Checking generated files..."
+          set -euo pipefail
 
-          if [ ! -f uk_iam_results.csv ]; then
-            echo "ERROR: uk_iam_results.csv was not created"
-            exit 1
-          fi
+          for file in \
+            uk_iam_results.csv \
+            uk_iam_results.json \
+            uk_iam_source_audit.csv \
+            uk_iam_run_log.csv
+          do
+            test -f "$file" || {
+              echo "ERROR: $file was not created"
+              exit 1
+            }
+          done
 
-          if [ ! -f uk_iam_results.json ]; then
-            echo "ERROR: uk_iam_results.json was not created"
-            exit 1
-          fi
+          python - <<'PY'
+          import csv
+          import re
+
+          with open("uk_iam_results.csv", encoding="utf-8-sig", newline="") as handle:
+              reader = csv.DictReader(handle)
+              required = {
+                  "company", "title", "location", "location_status", "match_type",
+                  "match_score", "confidence", "url",
+              }
+              missing = required - set(reader.fieldnames or [])
+              if missing:
+                  raise SystemExit(
+                      "ERROR: V5.3 CSV is missing columns: " + ", ".join(sorted(missing))
+                  )
+
+              rows = list(reader)
+
+              bad_location_status = [
+                  row for row in rows
+                  if row.get("location_status", "") != "UK CONFIRMED"
+              ]
+              if bad_location_status:
+                  raise SystemExit(
+                      "ERROR: non-confirmed UK locations leaked into output: "
+                      + repr([
+                          (r.get("company", ""), r.get("title", ""), r.get("location", ""))
+                          for r in bad_location_status[:5]
+                      ])
+                  )
+
+              bad_placeholder_locations = [
+                  row for row in rows
+                  if not row.get("location", "").strip()
+                  or row.get("location", "").strip().lower() in {
+                      "uk location not specified", "location not specified"
+                  }
+              ]
+              if bad_placeholder_locations:
+                  raise SystemExit(
+                      "ERROR: unconfirmed/placeholder locations leaked into output: "
+                      + repr([
+                          (r.get("company", ""), r.get("title", ""), r.get("location", ""))
+                          for r in bad_placeholder_locations[:5]
+                      ])
+                  )
+
+              bad_salary = [
+                  row for row in rows
+                  if re.fullmatch(r"£\s?\d{1,4}(?:\.\d{1,2})?", row.get("salary", "").strip())
+              ]
+              if bad_salary:
+                  raise SystemExit(
+                      "ERROR: isolated low-value salary leaked into output: "
+                      + repr([
+                          (r.get("company", ""), r.get("title", ""), r.get("salary", ""))
+                          for r in bad_salary[:5]
+                      ])
+                  )
+
+              bad_listing = [
+                  row.get("title", "")
+                  for row in rows
+                  if re.search(r"^[\d,]+\s+results?\s+for\b", row.get("title", ""), re.I)
+              ]
+              if bad_listing:
+                  raise SystemExit(
+                      "ERROR: search/listing pages leaked into final output: "
+                      + repr(bad_listing[:5])
+                  )
+
+              valid_types = {"CORE IAM", "ADJACENT IDENTITY/SECURITY"}
+              bad_types = [
+                  row.get("match_type", "")
+                  for row in rows
+                  if row.get("match_type", "") not in valid_types
+              ]
+              if bad_types:
+                  raise SystemExit(
+                      "ERROR: invalid V5.3 match_type values: " + repr(bad_types[:5])
+                  )
+
+              print(f"V5.3 CSV schema: OK ({len(rows)} result rows)")
+          PY
 
           echo ""
-          echo "CSV found:"
-          ls -lh uk_iam_results.csv
+          echo "Generated files:"
+          ls -lh \
+            uk_iam_results.csv \
+            uk_iam_results.json \
+            uk_iam_source_audit.csv \
+            uk_iam_run_log.csv
 
           echo ""
-          echo "JSON found:"
-          ls -lh uk_iam_results.json
-
-          echo ""
-          echo "Number of CSV lines:"
+          echo "Result CSV lines:"
           wc -l uk_iam_results.csv
 
-
-      # ---------------------------------------------------------
-      # 8. UPLOAD RESULTS
-      # ---------------------------------------------------------
       - name: Upload job results
         uses: actions/upload-artifact@v4
         with:
-          name: uk-iam-results
+          name: uk-iam-results-v5-3
           path: |
             uk_iam_results.csv
             uk_iam_results.json
             uk_iam_source_audit.csv
-            uk_iam_run_log.json
-          if-no-files-found: warn
+            uk_iam_run_log.csv
+          if-no-files-found: error
+          retention-days: 14
 
-
-      # ---------------------------------------------------------
-      # 9. SEND EMAIL REPORT
-      # ---------------------------------------------------------
       - name: Send email
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+        shell: bash
         run: |
+          set -euo pipefail
           python send_email.py
