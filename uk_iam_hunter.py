@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UK IAM / PAM JOB DISCOVERY ENGINE v5.2
+UK IAM / PAM JOB DISCOVERY ENGINE v5.3
 ====================================
 
 Purpose:
@@ -1414,42 +1414,131 @@ def contains_uk_location(location: str) -> bool:
     return contains_uk(scrubbed)
 
 
+def _explicit_location_candidates(description: str) -> List[str]:
+    """Extract job-specific location statements from the leading job text.
+
+    We deliberately require a location label/phrase instead of accepting any UK
+    word found in a careers footer. This is the core V5.3 precision safeguard.
+    """
+    head = re.sub(r"\s+", " ", (description or "")[:6000]).strip()
+    if not head:
+        return []
+
+    patterns = [
+        r"\b(?:job\s+location|work\s+location|primary\s+location|office\s+location|location)\s*[:\-]\s*([^.;|]{2,140})",
+        r"\b(?:based\s+in|based\s+at|role\s+is\s+based\s+in|position\s+is\s+based\s+in)\s+([^.;|]{2,120})",
+    ]
+
+    found: List[str] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, head, re.I):
+            candidate = re.sub(r"\s+", " ", match.group(1)).strip(" ,:-")
+            if candidate and candidate not in found:
+                found.append(candidate)
+    return found[:10]
+
+
+def _url_path_location_text(url: str) -> str:
+    try:
+        path = unquote(urlparse(url or "").path or "")
+    except Exception:
+        path = ""
+    return re.sub(r"[_\-/]+", " ", path).strip()
+
+
+def _uk_location_from_url(url: str) -> str:
+    """Return a conservative display location inferred from a job URL path."""
+    path_text = _url_path_location_text(url)
+    if not path_text or not contains_uk_location(path_text):
+        return ""
+
+    # Prefer a concrete UK city/region if the URL exposes one.
+    generic = {
+        "uk", "gb", "gbr", "united kingdom", "great britain",
+        "england", "scotland", "wales", "northern ireland",
+    }
+    for term in sorted(UK_TERMS, key=len, reverse=True):
+        if term.lower() in generic:
+            continue
+        if _phrase_present(term, path_text):
+            return f"{term.title()}, United Kingdom"
+
+    return "United Kingdom"
+
+
+def resolve_confirmed_uk_location(
+    location: str,
+    description: str,
+    url: str,
+) -> str:
+    """Return a display location only when UK location evidence is confirmed."""
+    location = re.sub(r"\s+", " ", (location or "")).strip()
+    if location and not is_placeholder_location(location) and contains_uk_location(location):
+        return location
+
+    candidates = _explicit_location_candidates(description)
+    for candidate in candidates:
+        if contains_uk_location(candidate):
+            return candidate
+
+    from_url = _uk_location_from_url(url)
+    if from_url:
+        return from_url
+
+    return "United Kingdom (confirmed)"
+
+
 def evaluate_uk_location(
     location: str,
     description: str,
     url: str,
 ) -> Tuple[bool, str]:
-    location = (location or "").strip()
+    """Strict UK-only validation for an individual vacancy.
+
+    V5.3 never treats an unknown location as UK merely because the employer
+    careers page or footer mentions the United Kingdom. A job must have one of:
+    1) an explicit UK location field,
+    2) a labelled UK location/base statement in the job body, or
+    3) a job-specific URL path that itself carries a UK location.
+    """
+    location = re.sub(r"\s+", " ", (location or "")).strip()
 
     if location and not is_placeholder_location(location):
         uk_location = contains_uk_location(location)
         foreign_location = contains_foreign_location(location)
 
-        # Multi-location roles are valid when at least one explicit UK location
-        # exists, e.g. "Knutsford, United Kingdom | Prague, Czechia".
+        # Multi-location roles remain valid when at least one UK location exists,
+        # e.g. "Knutsford, United Kingdom; Prague, Czechia".
         if uk_location:
-            return True, f"job location: {location[:180]}"
+            return True, f"confirmed UK job location: {location[:180]}"
 
-        # Explicit foreign-only locations override any UK words in the global
-        # footer, navigation or employer description.
         if foreign_location:
             return False, f"foreign job location: {location[:180]}"
 
-        # An explicit location that cannot be recognised as UK should not be
-        # rescued by a global employer footer. Remote/multiple-location labels
-        # are handled as placeholders above.
-        return False, f"explicit location is not recognised as UK: {location[:180]}"
+        # Any explicit but unrecognised location is rejected. This also catches
+        # city-only foreign values such as Pune or Chennai without requiring an
+        # exhaustive world-city blacklist.
+        return False, f"explicit location is not confirmed UK: {location[:180]}"
 
-    # Missing/placeholder locations need job-specific UK evidence. Only inspect
-    # the leading body text to avoid matching huge site-wide footers.
-    body_head = (description or "")[:6000]
-    if contains_uk(body_head):
-        return True, "UK evidence in job description"
+    # Placeholder/missing location: inspect only explicit job-specific location
+    # statements, never arbitrary UK words in the description/footer.
+    candidates = _explicit_location_candidates(description)
+    uk_candidates = [c for c in candidates if contains_uk_location(c)]
+    if uk_candidates:
+        return True, f"confirmed UK location in job text: {uk_candidates[0][:160]}"
 
-    if contains_uk(url or ""):
-        return True, "UK evidence in job URL"
+    foreign_candidates = [c for c in candidates if contains_foreign_location(c)]
+    if foreign_candidates:
+        return False, f"foreign location in job text: {foreign_candidates[0][:160]}"
 
-    return False, "no job-specific UK evidence"
+    # Job-specific URL paths such as /job/london/... or /job/knutsford/... are
+    # acceptable fallback evidence. Generic search/listing URLs are already
+    # rejected by the non-job-page gates.
+    path_text = _url_path_location_text(url)
+    if path_text and contains_uk_location(path_text):
+        return True, f"confirmed UK location in job URL: {path_text[:160]}"
+
+    return False, "location unknown/unconfirmed for UK-only search"
 
 
 def is_non_job_title(title: str) -> bool:
@@ -1619,30 +1708,66 @@ def extract_employment_type(text: str) -> str:
     return ""
 
 
+def _salary_number(value: str) -> Optional[int]:
+    value = (value or "").lower().replace("£", "").replace(",", "").strip()
+    if not value:
+        return None
+    multiplier = 1000 if value.endswith("k") else 1
+    if value.endswith("k"):
+        value = value[:-1]
+    try:
+        return int(float(value) * multiplier)
+    except ValueError:
+        return None
+
+
 def extract_salary(text: str) -> str:
+    """Extract only plausible GBP salary/rate values.
+
+    V5.2 could return isolated page values such as "£400" as a salary. V5.3
+    requires either a plausible annual amount (>= £10,000), explicit annual
+    context, or explicit daily-rate context.
+    """
     if not text:
         return ""
 
-    patterns = [
-        r"£\s?[\d,]+(?:\s?[-–]\s?£?\s?[\d,]+)?(?:\s?(?:per annum|pa|a year|per year))?",
-        r"£\s?[\d,]+k(?:\s?[-–]\s?£?\s?[\d,]+k)?",
-        r"salary[^.]{0,120}",
+    sample = re.sub(r"\s+", " ", text[:12000])
+
+    # Daily-rate values are valid only when the surrounding text explicitly
+    # identifies them as a day/daily rate.
+    daily_patterns = [
+        r"(?:day\s+rate|daily\s+rate)\s*[:\-]?\s*(£\s?[\d,]+(?:\.\d{1,2})?)",
+        r"(£\s?[\d,]+(?:\.\d{1,2})?)\s*(?:/\s*day|per\s+day|a\s+day)",
     ]
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            text,
-            re.I,
-        )
-
+    for pattern in daily_patterns:
+        match = re.search(pattern, sample, re.I)
         if match:
-            return re.sub(
-                r"\s+",
-                " ",
-                match.group(0),
-            ).strip()
+            amount = match.group(1)
+            number = _salary_number(amount)
+            if number is not None and 100 <= number <= 2500:
+                return re.sub(r"\s+", " ", match.group(0)).strip()
+
+    # Annual salary ranges/amounts. Low isolated values are rejected.
+    annual_pattern = re.compile(
+        r"£\s?(\d{2,3}(?:\.\d+)?k|[\d,]+(?:\.\d{1,2})?)"
+        r"(?:\s*(?:-|–|to)\s*£?\s?(\d{2,3}(?:\.\d+)?k|[\d,]+(?:\.\d{1,2})?))?"
+        r"(?:\s*(?:per\s+annum|p\.?a\.?|a\s+year|per\s+year|annually))?",
+        re.I,
+    )
+
+    for match in annual_pattern.finditer(sample):
+        first = _salary_number(match.group(1))
+        second = _salary_number(match.group(2) or "") if match.group(2) else None
+        if first is None:
+            continue
+        if first < 10000:
+            # Never treat a bare £400/£500/etc as an annual salary.
+            continue
+        if first > 1000000:
+            continue
+        if second is not None and not (10000 <= second <= 1000000):
+            continue
+        return re.sub(r"\s+", " ", match.group(0)).strip()
 
     return ""
 
@@ -2854,7 +2979,7 @@ def scan_greenhouse_job_by_id(
         description=description,
         location=location,
         url=url,
-        method="Greenhouse Job API -> V5.2 dynamic discovery",
+        method="Greenhouse Job API -> V5.3 dynamic discovery",
     )
     return [result] if result else []
 
@@ -3063,7 +3188,7 @@ def extract_barclays_job_result(
 
 def extract_results_from_candidate(
     url: str,
-    method: str = "V5.2 global discovery",
+    method: str = "V5.3 global discovery",
 ) -> List[Dict[str, Any]]:
     """Fetch one discovered URL and turn it into zero or more validated jobs."""
     url = normalise_url(url)
@@ -3462,8 +3587,20 @@ def build_result(
     if not allowed_result_url(original_url, company):
         return None
 
+    # At this point evaluate_uk_location has already confirmed the vacancy is
+    # UK-specific. Replace placeholder locations with the strongest confirmed
+    # job-specific evidence available for a cleaner report.
+    location = resolve_confirmed_uk_location(location, description, original_url)
+
     if not salary:
         salary = extract_salary(full_text)
+    else:
+        # Structured salary values are still validated before they reach the
+        # report. This prevents isolated page numbers such as "£400" leaking in.
+        validated_salary = extract_salary(str(salary))
+        if not validated_salary:
+            validated_salary = extract_salary(full_text)
+        salary = validated_salary
 
     if not date_posted:
         date_posted = extract_posted_date(full_text)
@@ -3473,7 +3610,8 @@ def build_result(
     return {
         "company": company[0],
         "title": title,
-        "location": location or "UK location not specified",
+        "location": location,
+        "location_status": "UK CONFIRMED",
         "working_arrangement": arrangement,
         "employment_type": employment_type,
         "salary": salary,
@@ -4698,6 +4836,7 @@ RESULT_FIELDS = [
     "company",
     "title",
     "location",
+    "location_status",
     "working_arrangement",
     "employment_type",
     "salary",
@@ -4979,7 +5118,7 @@ def display_audit(
 # ============================================================================
 
 def run_self_test() -> None:
-    """Comprehensive offline regression tests for V5.2.
+    """Comprehensive offline regression tests for V5.3.
 
     Covers classifier precision/recall, location handling, listing-page
     rejection, match-type categorisation, Barclays/TalentBrew discovery and
@@ -5091,6 +5230,70 @@ def run_self_test() -> None:
             "Search our Job Opportunities at Barclays",
             "IAM identity access management SailPoint CyberArk.",
             "London, United Kingdom",
+            "Permanent",
+        ),
+        (
+            "Barclays PAM Vaulting Analyst India",
+            False,
+            "PAM Non-Personal Account (NPA) Vaulting Analyst",
+            "Privileged access management, vaulting, JML and access governance.",
+            "Pune, India",
+            "Permanent",
+        ),
+        (
+            "Barclays CISO IAM SecDevOps India",
+            False,
+            "CISO IAM SecDevOps",
+            "IAM engineering, SSO, PAM and identity security.",
+            "Pune, India",
+            "Permanent",
+        ),
+        (
+            "Barclays Principal Engineer IAM India",
+            False,
+            "Principal Engineer IAM- XDP",
+            "IAM engineering, federation, JML and authentication.",
+            "Pune, India",
+            "Permanent",
+        ),
+        (
+            "Barclays SRE IAM India",
+            False,
+            "Site Reliability Engineer (SRE) - Identity Access Management IAM",
+            "Identity access management and IAM platform engineering.",
+            "Pune, India",
+            "Permanent",
+        ),
+        (
+            "Barclays JML SME India",
+            False,
+            "JML Control Monitoring SME",
+            "JML, PAM, access reviews and RBAC controls.",
+            "Pune, India",
+            "Permanent",
+        ),
+        (
+            "Barclays Privileged Access Analyst India",
+            False,
+            "Senior Analyst – Privileged Access Violation Management",
+            "Privileged access, IAM, PAM and identity security.",
+            "Pune, India",
+            "Permanent",
+        ),
+        (
+            "Barclays Security Cloud Architect India",
+            False,
+            "Security Cloud Lead Enterprise Architect",
+            "IAM, federation, access reviews and authentication.",
+            "Chennai, India",
+            "Permanent",
+        ),
+        (
+            "Unknown location with UK footer",
+            False,
+            "IAM Engineer",
+            "IAM, SailPoint and CyberArk. Our organisation has offices across the UK.",
+            "UK location not specified",
             "Permanent",
         ),
     ]
@@ -5214,12 +5417,57 @@ def run_self_test() -> None:
     if not seeds_ok:
         failures.append("Barclays focused discovery seeds")
 
+    # Missing location may be accepted only when the individual job URL or a
+    # labelled job-location statement explicitly confirms the UK.
+    url_only = evaluate_uk_location(
+        "UK location not specified",
+        "IAM engineering responsibilities.",
+        "https://search.jobs.barclays/job/london/identity-and-access-lead/13015/123",
+    )[0]
+    print(f"{'PASS' if url_only else 'FAIL'} | UK location inferred from job URL")
+    if not url_only:
+        failures.append("UK location from job URL")
+
+    labelled_body = evaluate_uk_location(
+        "",
+        "This role manages IAM and PAM. Location: Manchester, United Kingdom. Benefits apply.",
+        "https://example.com/jobs/123",
+    )[0]
+    print(f"{'PASS' if labelled_body else 'FAIL'} | UK location inferred from labelled job text")
+    if not labelled_body:
+        failures.append("UK location from labelled body")
+
+    footer_only = evaluate_uk_location(
+        "UK location not specified",
+        "IAM and SailPoint role. We operate globally including the UK and Europe.",
+        "https://example.com/jobs/123",
+    )[0]
+    print(f"{'PASS' if not footer_only else 'FAIL'} | generic UK footer does not confirm location")
+    if footer_only:
+        failures.append("generic UK footer location leak")
+
+    # Salary precision regressions.
+    salary_cases = [
+        ("£400", ""),
+        ("Some page number £400 unrelated to compensation", ""),
+        ("Day rate: £400", "Day rate: £400"),
+        ("£550 per day", "£550 per day"),
+        ("Salary £60,000 per annum", "£60,000 per annum"),
+        ("Salary £75k - £90k", "£75k - £90k"),
+    ]
+    for raw, expected in salary_cases:
+        got = extract_salary(raw)
+        ok = got.lower() == expected.lower()
+        print(f"{'PASS' if ok else 'FAIL'} | salary | {raw!r} -> {got!r}")
+        if not ok:
+            failures.append(f"salary: {raw}")
+
     if failures:
-        raise RuntimeError("V5.2 self-test failed: " + ", ".join(failures))
+        raise RuntimeError("V5.3 self-test failed: " + ", ".join(failures))
 
     print(
-        f"V5.2 self-test passed: {len(cases)} classifier cases, "
-        f"{len(type_cases)} match-type cases + location, Barclays and URL tests"
+        f"V5.3 self-test passed: {len(cases)} classifier cases, "
+        f"{len(type_cases)} match-type cases + strict UK location, salary, Barclays and URL tests"
     )
 
 
@@ -5231,7 +5479,7 @@ def main() -> None:
     started = time.time()
 
     print()
-    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5.2")
+    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5.3")
     print(f"Companies/fallback sources: {len(COMPANIES)}")
     print(f"ATS API boards: {len(ATS_BOARDS)}")
     print(f"Global discovery: {'ON' if USE_GLOBAL_DISCOVERY else 'OFF'}")
