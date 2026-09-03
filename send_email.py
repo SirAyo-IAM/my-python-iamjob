@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Email UK IAM Job Hunter V5.3 results through Brevo.
+Email UK IAM Job Hunter V5.4 results through Brevo.
 
 Required environment variables:
     BREVO_API_KEY
@@ -8,7 +8,10 @@ Required environment variables:
     BREVO_SENDER_EMAIL
 
 Expected input:
-    uk_iam_results.csv
+    uk_iam_new_results.csv
+
+If the file contains no rows, the script exits successfully without
+sending an email. This prevents repeat daily emails for already-seen jobs.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from typing import Dict, List
 import requests
 
 
-RESULT_CSV = Path("uk_iam_results.csv")
+RESULT_CSV = Path(os.getenv("IAM_EMAIL_RESULTS_FILE", "uk_iam_new_results.csv"))
 BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
 REQUEST_TIMEOUT = 30
 MAX_EMAIL_ROWS = 100
@@ -75,8 +78,8 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     if not jobs:
         rows = """
         <tr>
-          <td colspan="12" style="padding:16px;text-align:center;">
-            No matching UK IAM/PAM vacancies were found in this run.
+          <td colspan="13" style="padding:16px;text-align:center;">
+            No new UK IAM/PAM vacancies were found in this run.
           </td>
         </tr>
         """
@@ -93,6 +96,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
             employment = safe(job.get("employment_type", ""))
             salary = safe(job.get("salary", ""))
             posted = safe(job.get("date_posted", ""))
+            notification_status = safe(job.get("notification_status", "NEW"))
             match_type = safe(job.get("match_type", ""))
             score = safe(job.get("match_score", ""))
             confidence = safe(job.get("confidence", ""))
@@ -112,6 +116,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
                 <tr>
                   <td>{company}</td>
                   <td>{role}</td>
+                  <td>{notification_status}</td>
                   <td>{match_type}</td>
                   <td>{score}</td>
                   <td>{confidence}</td>
@@ -140,13 +145,13 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
 <html>
 <head>
   <meta charset="utf-8">
-  <title>UK IAM Job Hunter V5.3</title>
+  <title>UK IAM Job Hunter V5.4</title>
 </head>
 <body style="font-family:Arial,Helvetica,sans-serif;color:#202124;">
   <div style="max-width:1400px;margin:0 auto;">
-    <h2 style="margin-bottom:6px;">UK IAM / PAM Job Hunter V5.3</h2>
+    <h2 style="margin-bottom:6px;">UK IAM / PAM Job Hunter V5.4</h2>
     <p style="margin-top:0;">
-      <strong>{len(jobs)}</strong> matching job(s) found.<br>
+      <strong>{len(jobs)}</strong> NEW/UPDATED job(s) found.<br>
       Core IAM: <strong>{core_count}</strong> &nbsp;|&nbsp;
       Adjacent identity/security: <strong>{adjacent_count}</strong><br>
       Report generated: {safe(generated)}
@@ -164,6 +169,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
           <tr>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Company</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Role</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Status</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Match Type</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Score</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Confidence</th>
@@ -183,7 +189,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     </div>
 
     <p style="margin-top:20px;font-size:12px;color:#666;">
-      Generated automatically by UK IAM / PAM Job Hunter V5.3.
+      Generated automatically by UK IAM / PAM Job Hunter V5.4.
     </p>
   </div>
 </body>
@@ -208,7 +214,7 @@ def build_payload(
                 "email": recipient_email,
             }
         ],
-        "subject": f"UK IAM Job Hunter V5.3 - {len(jobs)} match(es) - {today}",
+        "subject": f"UK IAM Hunter V5.4 - {len(jobs)} NEW/UPDATED role(s) - {today}",
         "htmlContent": build_html(jobs),
         "tags": ["uk-iam-job-hunter-v5-3"],
     }
@@ -246,18 +252,26 @@ def send_report(
 
 
 def main() -> None:
+    jobs = read_jobs(RESULT_CSV)
+
+    if not jobs:
+        print(
+            "No NEW or UPDATED IAM jobs this run. "
+            "Email not sent."
+        )
+        return
+
     api_key = require_env("BREVO_API_KEY")
     report_email = require_env("REPORT_EMAIL")
     sender_email = require_env("BREVO_SENDER_EMAIL")
 
-    jobs = read_jobs()
     payload = build_payload(
         jobs=jobs,
         sender_email=sender_email,
         recipient_email=report_email,
     )
 
-    print(f"Preparing IAM job email with {len(jobs)} result(s)...")
+    print(f"Preparing IAM email with {len(jobs)} NEW/UPDATED result(s)...")
 
     message_id = send_report(
         api_key=api_key,
