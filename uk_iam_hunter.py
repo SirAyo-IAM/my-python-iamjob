@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UK IAM / PAM JOB DISCOVERY ENGINE v5.3
+UK IAM / PAM JOB DISCOVERY ENGINE v5.4
 ====================================
 
 Purpose:
@@ -40,6 +40,7 @@ Environment variables:
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import json
 import os
@@ -47,8 +48,10 @@ import re
 import sys
 import time
 import threading
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import (
     parse_qs,
@@ -92,10 +95,37 @@ COMPANY_SCAN_SECONDS = int(os.getenv("IAM_COMPANY_SCAN_SECONDS", "75"))
 PLAYWRIGHT_BUDGET = int(os.getenv("IAM_PLAYWRIGHT_BUDGET", "10"))
 _playwright_calls = 0
 _playwright_lock = threading.Lock()
-GLOBAL_SEARCH_QUERY_LIMIT = int(os.getenv("GLOBAL_SEARCH_QUERY_LIMIT", "12"))
+GLOBAL_SEARCH_QUERY_LIMIT = int(os.getenv("GLOBAL_SEARCH_QUERY_LIMIT", "18"))
 MAX_GLOBAL_CANDIDATES = int(os.getenv("MAX_GLOBAL_CANDIDATES", "140"))
 MAX_LISTING_LINKS = int(os.getenv("MAX_LISTING_LINKS", "60"))
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+
+BRAVE_SEARCH_FRESHNESS = os.getenv(
+    "BRAVE_SEARCH_FRESHNESS",
+    "pw",
+).strip().lower()
+
+RECENT_SEARCH_HINT = os.getenv(
+    "IAM_RECENT_SEARCH_HINT",
+    "posted this week",
+).strip()
+
+# Persistent seen-job state. GitHub Actions restores/saves this directory
+# between runs so old vacancies are not emailed every day.
+STATE_DIR = Path(os.getenv("IAM_STATE_DIR", ".iam_state"))
+SEEN_STATE_FILE = Path(
+    os.getenv(
+        "IAM_SEEN_STATE_FILE",
+        str(STATE_DIR / "seen_jobs.json"),
+    )
+)
+STATE_RETENTION_DAYS = int(
+    os.getenv("IAM_STATE_RETENTION_DAYS", "180")
+)
+NOTIFY_UPDATED_JOBS = os.getenv(
+    "IAM_NOTIFY_UPDATED_JOBS",
+    "true",
+).lower() == "true"
 
 # Search engine discovery.
 USE_SEARCH_DISCOVERY = True
@@ -131,7 +161,9 @@ GOOGLE_APPS_SCRIPT_TOKEN = os.getenv(
 )
 
 CSV_FILE = "uk_iam_results.csv"
+NEW_CSV_FILE = "uk_iam_new_results.csv"
 JSON_FILE = "uk_iam_results.json"
+NEW_JSON_FILE = "uk_iam_new_results.json"
 AUDIT_FILE = "uk_iam_source_audit.csv"
 RUN_LOG_FILE = "uk_iam_run_log.csv"
 
@@ -176,6 +208,8 @@ ATS_DOMAINS = {
     "ultipro.com": "UKG",
     "ukg.com": "UKG",
     "applytojob.com": "ApplyToJob",
+    "njoyn.com": "Njoyn",
+    "pageuppeople.com": "PageUp",
 }
 
 
@@ -527,6 +561,30 @@ DIRECT_DISCOVERY_SEEDS = [
     ("Barclays entitlement search", "https://search.jobs.barclays/search-jobs/entitlement/22545/1/1"),
     ("Odevo jobs", "https://career.odevo.com/jobs"),
     ("Qube Greenhouse", "https://job-boards.greenhouse.io/quberesearchandtechnologies"),
+
+    # V5.4 source-coverage expansion from real UK IAM misses.
+    ("Allica Bank Ashby", "https://jobs.ashbyhq.com/allica-bank"),
+    (
+        "CGI UK Njoyn",
+        "https://cgi.njoyn.com/corp/xweb/xweb.asp?CLID=21001&CountryID=UK&page=joblisting",
+    ),
+    (
+        "Aston Martin PageUp",
+        "https://careers.astonmartin.com/mob/cw/en/listing/",
+    ),
+    (
+        "Fruition Group jobs",
+        "https://www.fruitiongroup.com/job-search/",
+    ),
+    (
+        "Givaudan jobs",
+        "https://careers.givaudan.com/global/en/search-results",
+    ),
+    (
+        "Computershare Oracle Recruiting",
+        "https://fa-evdq-saasfaprod1.fa.ocs.oraclecloud.com/"
+        "hcmUI/CandidateExperience/en/sites/CX_2001/",
+    ),
 ]
 
 # Greenhouse wrappers where the employer site renders {{ job.title }} and the
@@ -1590,6 +1648,33 @@ def explicit_non_permanent(
         r"\b(?:day|daily)\s+rate\b",
     ]
     return any(re.search(pattern, head, re.I) for pattern in patterns)
+
+
+
+CLOSED_JOB_PATTERNS = [
+    r"\bposition has been filled\b",
+    r"\bthis position has been filled\b",
+    r"\bjob has been filled\b",
+    r"\bjob is no longer available\b",
+    r"\bthis job is no longer available\b",
+    r"\bvacancy is no longer available\b",
+    r"\bapplications are now closed\b",
+    r"\bapplications have closed\b",
+    r"\bthis vacancy has closed\b",
+    r"\bjob posting has expired\b",
+]
+
+
+def is_closed_job_page(title: str, description: str) -> bool:
+    blob = re.sub(
+        r"\s+",
+        " ",
+        f"{title or ''} {description or ''}",
+    ).strip()
+    return any(
+        re.search(pattern, blob, re.I)
+        for pattern in CLOSED_JOB_PATTERNS
+    )
 
 
 def score_iam_relevance(
@@ -2743,6 +2828,11 @@ def brave_search(
                 "country": "gb",
                 "search_lang": "en",
                 "safesearch": "moderate",
+                **(
+                    {"freshness": BRAVE_SEARCH_FRESHNESS}
+                    if BRAVE_SEARCH_FRESHNESS in {"pd", "pw", "pm", "py"}
+                    else {}
+                ),
             },
             timeout=SEARCH_TIMEOUT,
         )
@@ -2860,6 +2950,7 @@ def looks_like_official_job_candidate(url: str) -> bool:
         for hint in [
             "/job", "/jobs", "career", "vacanc", "requisition",
             "position", "opening", "opportunit", "gh_jid=",
+            "jobdetails", "jobid=", "joblisting", "/listing",
         ]
     )
 
@@ -2868,7 +2959,15 @@ def looks_like_listing_url(url: str) -> bool:
     parsed = urlparse(url)
     path = parsed.path.lower().rstrip("/")
     query = parsed.query.lower()
-    if "search-jobs" in path or "search-jobs" in query:
+    if (
+        "search-jobs" in path
+        or "search-jobs" in query
+        or "page=joblisting" in query
+        or path.endswith("/listing")
+        or path.endswith("/listing/")
+        or "search-results" in path
+        or "job-search" in path
+    ):
         return True
     return path.endswith(("/jobs", "/careers", "/career", "/vacancies", "/opportunities"))
 
@@ -3188,7 +3287,7 @@ def extract_barclays_job_result(
 
 def extract_results_from_candidate(
     url: str,
-    method: str = "V5.3 global discovery",
+    method: str = "V5.4 global discovery",
 ) -> List[Dict[str, Any]]:
     """Fetch one discovered URL and turn it into zero or more validated jobs."""
     url = normalise_url(url)
@@ -3321,7 +3420,16 @@ def global_discovery() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         for query in GLOBAL_DISCOVERY_QUERIES[:GLOBAL_SEARCH_QUERY_LIMIT]:
             audit["queries"] += 1
             try:
-                found = search_urls(session, query)
+                # Prefer fresh results. If a search engine cannot satisfy the
+                # freshness wording, fall back to the original query.
+                fresh_query = (
+                    f"{query} {RECENT_SEARCH_HINT}".strip()
+                    if RECENT_SEARCH_HINT
+                    else query
+                )
+                found = search_urls(session, fresh_query)
+                if not found and fresh_query != query:
+                    found = search_urls(session, query)
             except Exception:
                 audit["errors"] += 1
                 found = []
@@ -3566,6 +3674,9 @@ def build_result(
     original_url = normalise_url(url)
 
     if not title or not original_url:
+        return None
+
+    if is_closed_job_page(title, description):
         return None
 
     full_text = f"{title} {description} {location}"
@@ -4720,6 +4831,342 @@ def deduplicate(
 
 
 # ============================================================================
+# PERSISTENT NEW-JOB STATE
+# ============================================================================
+
+def _state_text(value: Any) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value or "").strip().lower(),
+    )
+
+
+def job_state_identity(job: Dict[str, Any]) -> str:
+    """Stable identity used across separate GitHub Actions runs."""
+    company = _state_text(job.get("company", ""))
+    reference = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        _state_text(job.get("job_reference", "")),
+    )
+    canonical = canonical_url(
+        str(
+            job.get("canonical_url")
+            or job.get("url")
+            or ""
+        )
+    )
+
+    # Employer + reference survives URL/tracking changes best.
+    if company and reference:
+        raw = f"reference|{company}|{reference}"
+    elif canonical:
+        raw = f"url|{canonical}"
+    else:
+        raw = "|".join(
+            [
+                "role",
+                company,
+                _state_text(job.get("title", "")),
+                _state_text(job.get("location", "")),
+            ]
+        )
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
+
+
+def job_change_signature(job: Dict[str, Any]) -> str:
+    """Only user-meaningful changes trigger an UPDATED notification.
+
+    Relevance score, matched keywords and date parsing changes are deliberately
+    excluded so harmless crawler differences do not resend the same vacancy.
+    """
+    payload = {
+        "title": _state_text(job.get("title", "")),
+        "location": _state_text(job.get("location", "")),
+        "working_arrangement": _state_text(
+            job.get("working_arrangement", "")
+        ),
+        "employment_type": _state_text(
+            job.get("employment_type", "")
+        ),
+        "salary": _state_text(job.get("salary", "")),
+        "canonical_url": canonical_url(
+            str(
+                job.get("canonical_url")
+                or job.get("url")
+                or ""
+            )
+        ),
+    }
+    blob = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(
+        blob.encode("utf-8")
+    ).hexdigest()
+
+
+def load_seen_state() -> Dict[str, Any]:
+    if not SEEN_STATE_FILE.exists():
+        return {
+            "version": 1,
+            "updated_at": "",
+            "jobs": {},
+        }
+
+    try:
+        with SEEN_STATE_FILE.open(
+            "r",
+            encoding="utf-8",
+        ) as handle:
+            payload = json.load(handle)
+    except Exception:
+        # Corrupt state should never break discovery. Starting a fresh state
+        # can cause one baseline resend, which is safer than losing vacancies.
+        return {
+            "version": 1,
+            "updated_at": "",
+            "jobs": {},
+        }
+
+    if not isinstance(payload, dict):
+        payload = {}
+
+    jobs = payload.get("jobs", {})
+    if not isinstance(jobs, dict):
+        jobs = {}
+
+    return {
+        "version": 1,
+        "updated_at": str(payload.get("updated_at", "")),
+        "jobs": jobs,
+    }
+
+
+def _state_record_is_expired(
+    record: Dict[str, Any],
+    now: datetime,
+) -> bool:
+    if STATE_RETENTION_DAYS <= 0:
+        return False
+
+    value = str(
+        record.get("last_seen", "")
+        or record.get("first_seen", "")
+    ).strip()
+    if not value:
+        return False
+
+    try:
+        seen = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        )
+    except ValueError:
+        return False
+
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+
+    return (
+        now - seen.astimezone(timezone.utc)
+    ).days > STATE_RETENTION_DAYS
+
+
+def save_seen_state(state: Dict[str, Any]) -> None:
+    STATE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    SEEN_STATE_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temporary = SEEN_STATE_FILE.with_suffix(
+        ".tmp"
+    )
+
+    with temporary.open(
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(
+            state,
+            handle,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    temporary.replace(
+        SEEN_STATE_FILE
+    )
+
+
+def classify_new_jobs(
+    results: List[Dict[str, Any]],
+) -> Tuple[
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    Dict[str, int],
+]:
+    """Attach persistent state and return notification-worthy jobs.
+
+    Full results are still written to uk_iam_results.csv for auditing.
+    Only NEW (and optionally meaningful UPDATED) rows are written to
+    uk_iam_new_results.csv and emailed.
+    """
+    now = datetime.now(
+        timezone.utc
+    )
+    now_iso = now.isoformat()
+
+    state = load_seen_state()
+    jobs_state: Dict[str, Any] = state.get(
+        "jobs",
+        {},
+    )
+
+    # Keep state bounded.
+    jobs_state = {
+        key: value
+        for key, value in jobs_state.items()
+        if isinstance(value, dict)
+        and not _state_record_is_expired(
+            value,
+            now,
+        )
+    }
+
+    enriched: List[Dict[str, Any]] = []
+    notify: List[Dict[str, Any]] = []
+
+    new_count = 0
+    updated_count = 0
+    seen_count = 0
+
+    for original in results:
+        job = dict(original)
+        state_id = job_state_identity(
+            job
+        )
+        signature = job_change_signature(
+            job
+        )
+
+        existing = jobs_state.get(
+            state_id
+        )
+
+        if not isinstance(
+            existing,
+            dict,
+        ):
+            first_seen = now_iso
+            notification_status = "NEW"
+            new_count += 1
+        else:
+            first_seen = str(
+                existing.get(
+                    "first_seen",
+                    "",
+                )
+                or now_iso
+            )
+
+            previous_signature = str(
+                existing.get(
+                    "signature",
+                    "",
+                )
+            )
+
+            if (
+                previous_signature
+                and previous_signature != signature
+            ):
+                notification_status = "UPDATED"
+                updated_count += 1
+            else:
+                notification_status = "SEEN"
+                seen_count += 1
+
+        job["state_id"] = state_id
+        job["first_seen"] = first_seen
+        job["last_seen"] = now_iso
+        job["notification_status"] = (
+            notification_status
+        )
+
+        jobs_state[state_id] = {
+            "first_seen": first_seen,
+            "last_seen": now_iso,
+            "signature": signature,
+            "company": job.get(
+                "company",
+                "",
+            ),
+            "title": job.get(
+                "title",
+                "",
+            ),
+            "job_reference": job.get(
+                "job_reference",
+                "",
+            ),
+            "canonical_url": job.get(
+                "canonical_url",
+                "",
+            )
+            or canonical_url(
+                job.get(
+                    "url",
+                    "",
+                )
+            ),
+        }
+
+        enriched.append(
+            job
+        )
+
+        if (
+            notification_status == "NEW"
+            or (
+                notification_status == "UPDATED"
+                and NOTIFY_UPDATED_JOBS
+            )
+        ):
+            notify.append(
+                job
+            )
+
+    state["version"] = 1
+    state["updated_at"] = now_iso
+    state["jobs"] = jobs_state
+    save_seen_state(
+        state
+    )
+
+    stats = {
+        "new": new_count,
+        "updated": updated_count,
+        "seen": seen_count,
+        "notify": len(notify),
+        "state_total": len(jobs_state),
+    }
+
+    return enriched, notify, stats
+
+
+# ============================================================================
 # GOOGLE APPS SCRIPT
 # ============================================================================
 
@@ -4730,7 +5177,10 @@ def archive_to_google(
     if not ARCHIVE_TO_GOOGLE:
         return False
 
-    if not GOOGLE_APPS_SCRIPT_URL:
+    if (
+        not GOOGLE_APPS_SCRIPT_URL
+        or not GOOGLE_APPS_SCRIPT_TOKEN
+    ):
         return False
 
     try:
@@ -4818,9 +5268,19 @@ def archive_to_google(
             timeout=45,
         )
 
-        return (
-            response.ok
-            and bool(response.text)
+        response.raise_for_status()
+
+        try:
+            result = response.json()
+        except ValueError:
+            return False
+
+        # Existing Apps Script uses {"success": true}; the newer receiver
+        # design may use {"ok": true}. Support both without accepting an error
+        # response simply because it contained text.
+        return bool(
+            result.get("success") is True
+            or result.get("ok") is True
         )
 
     except Exception:
@@ -4851,6 +5311,10 @@ RESULT_FIELDS = [
     "url",
     "canonical_url",
     "discovered_at",
+    "first_seen",
+    "last_seen",
+    "notification_status",
+    "state_id",
 ]
 
 
@@ -4913,6 +5377,33 @@ def write_json(
         encoding="utf-8",
     ) as file:
 
+        json.dump(
+            payload,
+            file,
+            indent=2,
+            ensure_ascii=False,
+        )
+
+
+def write_new_json(
+    filename: str,
+    results: List[Dict[str, Any]],
+) -> None:
+    payload = {
+        "scan_time": datetime.now(
+            timezone.utc
+        ).isoformat(),
+        "new_or_updated_count": len(
+            results
+        ),
+        "results": results,
+    }
+
+    with open(
+        filename,
+        "w",
+        encoding="utf-8",
+    ) as file:
         json.dump(
             payload,
             file,
@@ -5118,7 +5609,7 @@ def display_audit(
 # ============================================================================
 
 def run_self_test() -> None:
-    """Comprehensive offline regression tests for V5.3.
+    """Comprehensive offline regression tests for V5.4.
 
     Covers classifier precision/recall, location handling, listing-page
     rejection, match-type categorisation, Barclays/TalentBrew discovery and
@@ -5462,12 +5953,147 @@ def run_self_test() -> None:
         if not ok:
             failures.append(f"salary: {raw}")
 
+    # V5.4 source coverage regression: known platform families must remain
+    # present as durable listing seeds.
+    seed_blob_lower = " ".join(
+        url.lower()
+        for _, url in DIRECT_DISCOVERY_SEEDS
+    )
+    source_terms = [
+        "ashbyhq.com/allica-bank",
+        "cgi.njoyn.com",
+        "careers.astonmartin.com",
+        "fruitiongroup.com/job-search",
+        "careers.givaudan.com",
+        "oraclecloud.com",
+    ]
+    source_ok = all(
+        term in seed_blob_lower
+        for term in source_terms
+    )
+    print(
+        f"{'PASS' if source_ok else 'FAIL'} | "
+        "V5.4 expanded ATS/source seeds"
+    )
+    if not source_ok:
+        failures.append(
+            "expanded ATS/source seeds"
+        )
+
+    # Closed official vacancy pages must be rejected even if IAM content is
+    # otherwise strong.
+    closed_result = build_result(
+        company=(
+            "Example Employer",
+            ["example.com"],
+            [],
+        ),
+        title=(
+            "Identity & Access Management "
+            "Technologies and Services Line Manager"
+        ),
+        description=(
+            "Saviynt CyberArk Entra ID SAML PAM IGA. "
+            "This position has been filled."
+        ),
+        location="Ashford, United Kingdom",
+        url="https://example.com/jobs/123",
+        method="self-test",
+        employment_type="Permanent",
+    )
+    closed_ok = closed_result is None
+    print(
+        f"{'PASS' if closed_ok else 'FAIL'} | "
+        "official filled vacancy rejected"
+    )
+    if not closed_ok:
+        failures.append(
+            "closed vacancy rejection"
+        )
+
+    # Persistent state: first run is NEW, identical second run is SEEN, a
+    # meaningful location change becomes UPDATED.
+    original_state_dir = STATE_DIR
+    original_state_file = SEEN_STATE_FILE
+
+    with tempfile.TemporaryDirectory() as state_test_dir:
+        globals()["STATE_DIR"] = Path(
+            state_test_dir
+        )
+        globals()["SEEN_STATE_FILE"] = (
+            Path(state_test_dir)
+            / "seen_jobs.json"
+        )
+
+        sample_job = {
+            "company": "Example Bank",
+            "title": "IAM Engineer",
+            "location": "London, United Kingdom",
+            "location_status": "UK CONFIRMED",
+            "working_arrangement": "Hybrid",
+            "employment_type": "Permanent",
+            "salary": "£70,000 per annum",
+            "date_posted": "2026-09-03",
+            "job_reference": "IAM-100",
+            "match_type": "CORE IAM",
+            "match_score": 150,
+            "confidence": "HIGH",
+            "match_reason": "Strong IAM title",
+            "matched_keywords": "IAM, Entra ID",
+            "source_method": "self-test",
+            "url": "https://examplebank.test/jobs/iam-100",
+            "canonical_url": "https://examplebank.test/jobs/iam-100",
+            "discovered_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        first_all, first_notify, first_stats = classify_new_jobs(
+            [sample_job]
+        )
+        second_all, second_notify, second_stats = classify_new_jobs(
+            [sample_job]
+        )
+
+        changed = dict(
+            sample_job
+        )
+        changed["location"] = (
+            "Manchester, United Kingdom"
+        )
+
+        third_all, third_notify, third_stats = classify_new_jobs(
+            [changed]
+        )
+
+        state_ok = (
+            first_stats["new"] == 1
+            and len(first_notify) == 1
+            and first_all[0]["notification_status"] == "NEW"
+            and second_stats["seen"] == 1
+            and len(second_notify) == 0
+            and second_all[0]["notification_status"] == "SEEN"
+            and third_stats["updated"] == 1
+            and len(third_notify) == 1
+            and third_all[0]["notification_status"] == "UPDATED"
+        )
+
+        print(
+            f"{'PASS' if state_ok else 'FAIL'} | "
+            "persistent NEW/SEEN/UPDATED state"
+        )
+        if not state_ok:
+            failures.append(
+                "persistent seen-job state"
+            )
+
+    globals()["STATE_DIR"] = original_state_dir
+    globals()["SEEN_STATE_FILE"] = original_state_file
+
     if failures:
-        raise RuntimeError("V5.3 self-test failed: " + ", ".join(failures))
+        raise RuntimeError("V5.4 self-test failed: " + ", ".join(failures))
 
     print(
-        f"V5.3 self-test passed: {len(cases)} classifier cases, "
-        f"{len(type_cases)} match-type cases + strict UK location, salary, Barclays and URL tests"
+        f"V5.4 self-test passed: {len(cases)} classifier cases, "
+        f"{len(type_cases)} match-type cases + freshness, source coverage, persistent state and precision tests"
     )
 
 
@@ -5479,7 +6105,7 @@ def main() -> None:
     started = time.time()
 
     print()
-    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5.3")
+    print("🚀 UK IAM / PAM JOB DISCOVERY ENGINE v5.4")
     print(f"Companies/fallback sources: {len(COMPANIES)}")
     print(f"ATS API boards: {len(ATS_BOARDS)}")
     print(f"Global discovery: {'ON' if USE_GLOBAL_DISCOVERY else 'OFF'}")
@@ -5493,6 +6119,9 @@ def main() -> None:
         f"seconds/company={COMPANY_SCAN_SECONDS}"
     )
     print(f"IAM minimum score: {IAM_MIN_SCORE}")
+    print(f"Global query families: {min(GLOBAL_SEARCH_QUERY_LIMIT, len(GLOBAL_DISCOVERY_QUERIES))}/{len(GLOBAL_DISCOVERY_QUERIES)}")
+    print(f"Fresh-search hint: {RECENT_SEARCH_HINT or 'OFF'}")
+    print(f"Seen-job state: {SEEN_STATE_FILE}")
     print("UK scope: UK-wide / Remote / Hybrid / Onsite")
     print("Employment: Permanent-only; contract/fixed-term/temporary/interim excluded")
     print()
@@ -5634,6 +6263,24 @@ def main() -> None:
         )
     )
 
+    # Persistent cross-run state.
+    #
+    # all_results remains the complete current scan for audit/artifacts.
+    # notification_results contains only NEW or meaningfully UPDATED jobs.
+    all_results, notification_results, state_stats = classify_new_jobs(
+        all_results
+    )
+
+    print()
+    print(
+        "Persistent state: "
+        f"new={state_stats['new']} | "
+        f"updated={state_stats['updated']} | "
+        f"already_seen={state_stats['seen']} | "
+        f"email_candidates={state_stats['notify']} | "
+        f"remembered={state_stats['state_total']}"
+    )
+
     # Google Apps Script archive.
     archived = 0
     if ARCHIVE_TO_GOOGLE and not GOOGLE_APPS_SCRIPT_URL:
@@ -5642,17 +6289,26 @@ def main() -> None:
             "⚠ Google archive requested, but GOOGLE_APPS_SCRIPT_URL is missing. "
             "Set GOOGLE_APPS_SCRIPT_URL and GOOGLE_APPS_SCRIPT_TOKEN as secrets."
         )
-    if ARCHIVE_TO_GOOGLE and GOOGLE_APPS_SCRIPT_URL and all_results:
+    if ARCHIVE_TO_GOOGLE and GOOGLE_APPS_SCRIPT_URL and notification_results:
         print()
         print("Sending discovered jobs to Google Apps Script...")
-        for job in all_results:
+        for job in notification_results:
             if archive_to_google(job):
                 archived += 1
-        print(f"Google archive submissions: {archived}/{len(all_results)}")
+        print(f"Google archive submissions: {archived}/{len(notification_results)}")
 
     # Output files.
     write_csv(CSV_FILE, all_results, RESULT_FIELDS)
+    write_csv(
+        NEW_CSV_FILE,
+        notification_results,
+        RESULT_FIELDS,
+    )
     write_json(JSON_FILE, all_results, audits)
+    write_new_json(
+        NEW_JSON_FILE,
+        notification_results,
+    )
     audit_fields = [
         "company", "source_type", "seeds", "pages", "job_links",
         "sitemap_urls", "search_urls", "queries", "candidate_urls",
@@ -5683,12 +6339,14 @@ def main() -> None:
         f"rejected={global_audit.get('rejected', 0)}, "
         f"matches={global_audit.get('matches', 0)}"
     )
-    print(f"✔ CSV saved: {CSV_FILE}")
+    print(f"✔ Full current CSV saved: {CSV_FILE}")
+    print(f"✔ NEW/UPDATED email CSV saved: {NEW_CSV_FILE}")
+    print(f"✔ NEW/UPDATED jobs this run: {len(notification_results)}")
     print(f"✔ JSON saved: {JSON_FILE}")
     print(f"✔ Audit saved: {AUDIT_FILE}")
     print(f"✔ Run log saved: {RUN_LOG_FILE}")
     if ARCHIVE_TO_GOOGLE:
-        print(f"✔ Google archive: {archived}/{len(all_results)}")
+        print(f"✔ Google archive: {archived}/{len(notification_results)}")
     print()
     print("Policy: official employer and recognised ATS destinations only.")
     print("Search engines are discovery mechanisms only; job boards are rejected.")
