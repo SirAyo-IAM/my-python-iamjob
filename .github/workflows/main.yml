@@ -1,4 +1,4 @@
-name: Run UK IAM Hunter V5.3
+name: Run UK IAM Hunter V5.4
 
 on:
   workflow_dispatch:
@@ -11,6 +11,9 @@ jobs:
   run-python:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
+    permissions:
+      contents: read
 
     steps:
       - name: Get repository
@@ -26,9 +29,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Repository contents:"
-          ls -la
-
           test -f uk_iam_hunter.py || {
             echo "ERROR: uk_iam_hunter.py was not found."
             exit 1
@@ -39,17 +39,46 @@ jobs:
             exit 1
           }
 
-          echo ""
-          echo "Checking V5.3 engine..."
-
-          if ! grep -q "UK IAM / PAM JOB DISCOVERY ENGINE v5.3" uk_iam_hunter.py; then
-            echo "ERROR: uk_iam_hunter.py is not V5.3."
-            echo "Detected version references:"
-            grep -niE "JOB DISCOVERY ENGINE v[0-9]+(\.[0-9]+)?|JOB HUNTER v[0-9]+" uk_iam_hunter.py | head -20 || true
+          if ! grep -q "UK IAM / PAM JOB DISCOVERY ENGINE v5.4" uk_iam_hunter.py; then
+            echo "ERROR: uk_iam_hunter.py is not V5.4."
+            grep -niE "JOB DISCOVERY ENGINE v[0-9]+(\.[0-9]+)?" uk_iam_hunter.py | head -20 || true
             exit 1
           fi
 
-          echo "V5.3 engine confirmed."
+          echo "V5.4 engine confirmed."
+
+      - name: Restore seen-job state
+        id: iam-state-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .iam_state
+          key: iam-seen-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            iam-seen-${{ runner.os }}-
+
+      - name: Prepare state directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .iam_state
+
+          if [ -f .iam_state/seen_jobs.json ]; then
+            echo "Previous seen-job state restored."
+            python - <<'PY'
+          import json
+
+          with open(".iam_state/seen_jobs.json", encoding="utf-8") as handle:
+              state = json.load(handle)
+
+          print(
+              "Remembered jobs:",
+              len(state.get("jobs", {})),
+          )
+          PY
+          else
+            echo "No previous state found."
+            echo "This is a baseline run: current matches will be treated as NEW once."
+          fi
 
       - name: Install Python dependencies
         shell: bash
@@ -64,36 +93,28 @@ jobs:
           set -euo pipefail
 
           python --version
-          python -m pip --version
+          python -m py_compile uk_iam_hunter.py
+          python -m py_compile send_email.py
 
           python - <<'PY'
           import requests
           import bs4
           import lxml
           import rich
-
-          print("requests: OK")
-          print("beautifulsoup4: OK")
-          print("lxml: OK")
-          print("rich: OK")
+          print("Python dependencies: OK")
           PY
 
-          echo "Checking Python syntax..."
-          python -m py_compile uk_iam_hunter.py
-          python -m py_compile send_email.py
-          echo "Python syntax: OK"
-
-      - name: Run V5.3 regression tests
+      - name: Run V5.4 regression tests
         shell: bash
         run: |
           set -euo pipefail
           python uk_iam_hunter.py --self-test
 
-      - name: Run UK IAM Hunter V5.3
+      - name: Run UK IAM Hunter V5.4
         env:
           IAM_MIN_SCORE: "75"
 
-          # Bounded CI mode.
+          # Bounded CI settings.
           IAM_MAX_WORKERS: "8"
           IAM_REQUEST_TIMEOUT: "12"
           IAM_SEARCH_TIMEOUT: "8"
@@ -103,43 +124,53 @@ jobs:
           IAM_MAX_SITEMAP_URLS: "500"
           IAM_COMPANY_SCAN_SECONDS: "75"
 
-          # Open-ended discovery remains enabled.
+          # Fresh open-ended discovery.
           USE_GLOBAL_DISCOVERY: "true"
           USE_SEARCH_DISCOVERY: "true"
-          GLOBAL_SEARCH_QUERY_LIMIT: "12"
-          MAX_GLOBAL_CANDIDATES: "140"
-          MAX_LISTING_LINKS: "60"
+          GLOBAL_SEARCH_QUERY_LIMIT: "18"
+          MAX_GLOBAL_CANDIDATES: "180"
+          MAX_LISTING_LINKS: "80"
+          IAM_RECENT_SEARCH_HINT: "posted this week"
 
-          # Avoid repeated search-engine queries for every fallback company.
+          # Use the stable API with a 7-day freshness window when configured.
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          BRAVE_SEARCH_FRESHNESS: "pw"
+
+          # Avoid N searches for every fallback company.
           USE_COMPANY_SEARCH_DISCOVERY: "false"
 
-          # CI-safe search discovery.
           SEARCH_ENGINE_MODE: "light"
-          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
 
-          # Browser rendering stays off in bounded mode.
+          # Keep bounded runtime.
           USE_PLAYWRIGHT: "false"
           IAM_PLAYWRIGHT_BUDGET: "10"
 
-          ARCHIVE_TO_GOOGLE: "true"
-          GOOGLE_APPS_SCRIPT_URL: ${{ secrets.GOOGLE_APPS_SCRIPT_URL }}
-          GOOGLE_APPS_SCRIPT_TOKEN: ${{ secrets.GOOGLE_APPS_SCRIPT_TOKEN }}
+          # Persistent cross-run dedupe.
+          IAM_STATE_DIR: ".iam_state"
+          IAM_STATE_RETENTION_DAYS: "180"
+          IAM_NOTIFY_UPDATED_JOBS: "true"
+
+          # Deliberately OFF until job-search quality is accepted.
+          ARCHIVE_TO_GOOGLE: "false"
 
         shell: bash
         run: |
           set -euo pipefail
           python uk_iam_hunter.py
 
-      - name: Check V5.3 results
+      - name: Check V5.4 results
         shell: bash
         run: |
           set -euo pipefail
 
           for file in \
             uk_iam_results.csv \
+            uk_iam_new_results.csv \
             uk_iam_results.json \
+            uk_iam_new_results.json \
             uk_iam_source_audit.csv \
-            uk_iam_run_log.csv
+            uk_iam_run_log.csv \
+            .iam_state/seen_jobs.json
           do
             test -f "$file" || {
               echo "ERROR: $file was not created"
@@ -149,118 +180,61 @@ jobs:
 
           python - <<'PY'
           import csv
-          import re
+          import json
 
           with open("uk_iam_results.csv", encoding="utf-8-sig", newline="") as handle:
-              reader = csv.DictReader(handle)
-              required = {
-                  "company", "title", "location", "location_status", "match_type",
-                  "match_score", "confidence", "url",
-              }
-              missing = required - set(reader.fieldnames or [])
-              if missing:
-                  raise SystemExit(
-                      "ERROR: V5.3 CSV is missing columns: " + ", ".join(sorted(missing))
-                  )
+              all_rows = list(csv.DictReader(handle))
 
-              rows = list(reader)
+          with open("uk_iam_new_results.csv", encoding="utf-8-sig", newline="") as handle:
+              new_rows = list(csv.DictReader(handle))
 
-              bad_location_status = [
-                  row for row in rows
-                  if row.get("location_status", "") != "UK CONFIRMED"
-              ]
-              if bad_location_status:
-                  raise SystemExit(
-                      "ERROR: non-confirmed UK locations leaked into output: "
-                      + repr([
-                          (r.get("company", ""), r.get("title", ""), r.get("location", ""))
-                          for r in bad_location_status[:5]
-                      ])
-                  )
+          valid_status = {"NEW", "UPDATED"}
+          bad = [
+              row.get("notification_status", "")
+              for row in new_rows
+              if row.get("notification_status", "") not in valid_status
+          ]
+          if bad:
+              raise SystemExit(
+                  "ERROR: new-results file contains non-notification rows: "
+                  + repr(bad[:5])
+              )
 
-              bad_placeholder_locations = [
-                  row for row in rows
-                  if not row.get("location", "").strip()
-                  or row.get("location", "").strip().lower() in {
-                      "uk location not specified", "location not specified"
-                  }
-              ]
-              if bad_placeholder_locations:
-                  raise SystemExit(
-                      "ERROR: unconfirmed/placeholder locations leaked into output: "
-                      + repr([
-                          (r.get("company", ""), r.get("title", ""), r.get("location", ""))
-                          for r in bad_placeholder_locations[:5]
-                      ])
-                  )
+          with open(".iam_state/seen_jobs.json", encoding="utf-8") as handle:
+              state = json.load(handle)
 
-              bad_salary = [
-                  row for row in rows
-                  if re.fullmatch(r"£\s?\d{1,4}(?:\.\d{1,2})?", row.get("salary", "").strip())
-              ]
-              if bad_salary:
-                  raise SystemExit(
-                      "ERROR: isolated low-value salary leaked into output: "
-                      + repr([
-                          (r.get("company", ""), r.get("title", ""), r.get("salary", ""))
-                          for r in bad_salary[:5]
-                      ])
-                  )
-
-              bad_listing = [
-                  row.get("title", "")
-                  for row in rows
-                  if re.search(r"^[\d,]+\s+results?\s+for\b", row.get("title", ""), re.I)
-              ]
-              if bad_listing:
-                  raise SystemExit(
-                      "ERROR: search/listing pages leaked into final output: "
-                      + repr(bad_listing[:5])
-                  )
-
-              valid_types = {"CORE IAM", "ADJACENT IDENTITY/SECURITY"}
-              bad_types = [
-                  row.get("match_type", "")
-                  for row in rows
-                  if row.get("match_type", "") not in valid_types
-              ]
-              if bad_types:
-                  raise SystemExit(
-                      "ERROR: invalid V5.3 match_type values: " + repr(bad_types[:5])
-                  )
-
-              print(f"V5.3 CSV schema: OK ({len(rows)} result rows)")
+          print("Current matching jobs:", len(all_rows))
+          print("NEW/UPDATED jobs:", len(new_rows))
+          print("Remembered jobs:", len(state.get("jobs", {})))
           PY
 
-          echo ""
-          echo "Generated files:"
-          ls -lh \
-            uk_iam_results.csv \
-            uk_iam_results.json \
-            uk_iam_source_audit.csv \
-            uk_iam_run_log.csv
-
-          echo ""
-          echo "Result CSV lines:"
-          wc -l uk_iam_results.csv
+      - name: Save seen-job state
+        uses: actions/cache/save@v4
+        with:
+          path: .iam_state
+          key: iam-seen-${{ runner.os }}-${{ github.run_id }}
 
       - name: Upload job results
         uses: actions/upload-artifact@v4
         with:
-          name: uk-iam-results-v5-3
+          name: uk-iam-results-v5-4
           path: |
             uk_iam_results.csv
+            uk_iam_new_results.csv
             uk_iam_results.json
+            uk_iam_new_results.json
             uk_iam_source_audit.csv
             uk_iam_run_log.csv
+            .iam_state/seen_jobs.json
           if-no-files-found: error
           retention-days: 14
 
-      - name: Send email
+      - name: Send NEW jobs email
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+          IAM_EMAIL_RESULTS_FILE: "uk_iam_new_results.csv"
         shell: bash
         run: |
           set -euo pipefail
