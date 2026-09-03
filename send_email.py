@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Email UK IAM Job Hunter V5.2 results through Brevo.
+Email UK IAM Job Hunter V5.3 results through Brevo.
 
 Required environment variables:
     BREVO_API_KEY
@@ -75,7 +75,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     if not jobs:
         rows = """
         <tr>
-          <td colspan="11" style="padding:16px;text-align:center;">
+          <td colspan="12" style="padding:16px;text-align:center;">
             No matching UK IAM/PAM vacancies were found in this run.
           </td>
         </tr>
@@ -88,6 +88,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
             title = safe(job.get("title", ""))
             company = safe(job.get("company", ""))
             location = safe(job.get("location", ""))
+            location_status = safe(job.get("location_status", ""))
             work = safe(job.get("working_arrangement", ""))
             employment = safe(job.get("employment_type", ""))
             salary = safe(job.get("salary", ""))
@@ -115,6 +116,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
                   <td>{score}</td>
                   <td>{confidence}</td>
                   <td>{location}</td>
+                  <td>{location_status}</td>
                   <td>{work}</td>
                   <td>{employment}</td>
                   <td>{salary}</td>
@@ -138,11 +140,11 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
 <html>
 <head>
   <meta charset="utf-8">
-  <title>UK IAM Job Hunter V5.2</title>
+  <title>UK IAM Job Hunter V5.3</title>
 </head>
 <body style="font-family:Arial,Helvetica,sans-serif;color:#202124;">
   <div style="max-width:1400px;margin:0 auto;">
-    <h2 style="margin-bottom:6px;">UK IAM / PAM Job Hunter V5.2</h2>
+    <h2 style="margin-bottom:6px;">UK IAM / PAM Job Hunter V5.3</h2>
     <p style="margin-top:0;">
       <strong>{len(jobs)}</strong> matching job(s) found.<br>
       Core IAM: <strong>{core_count}</strong> &nbsp;|&nbsp;
@@ -166,6 +168,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Score</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Confidence</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Location</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">UK Status</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Work</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Employment</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Salary</th>
@@ -180,7 +183,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     </div>
 
     <p style="margin-top:20px;font-size:12px;color:#666;">
-      Generated automatically by UK IAM / PAM Job Hunter V5.2.
+      Generated automatically by UK IAM / PAM Job Hunter V5.3.
     </p>
   </div>
 </body>
@@ -205,9 +208,9 @@ def build_payload(
                 "email": recipient_email,
             }
         ],
-        "subject": f"UK IAM Job Hunter V5.2 - {len(jobs)} match(es) - {today}",
+        "subject": f"UK IAM Job Hunter V5.3 - {len(jobs)} match(es) - {today}",
         "htmlContent": build_html(jobs),
-        "tags": ["uk-iam-job-hunter-v5-2"],
+        "tags": ["uk-iam-job-hunter-v5-3"],
     }
 
 
