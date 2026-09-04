@@ -3,6 +3,15 @@ name: Run UK IAM Hunter V5.4
 on:
   workflow_dispatch:
 
+  push:
+    branches:
+      - main
+    paths:
+      - "uk_iam_hunter.py"
+      - "iam_priority_discovery.py"
+      - "send_email.py"
+      - ".github/workflows/main.yml"
+
   schedule:
     - cron: "0 12 * * *"
       timezone: "Europe/London"
@@ -31,6 +40,11 @@ jobs:
 
           test -f uk_iam_hunter.py || {
             echo "ERROR: uk_iam_hunter.py was not found."
+            exit 1
+          }
+
+          test -f iam_priority_discovery.py || {
+            echo "ERROR: iam_priority_discovery.py was not found."
             exit 1
           }
 
@@ -94,6 +108,7 @@ jobs:
 
           python --version
           python -m py_compile uk_iam_hunter.py
+          python -m py_compile iam_priority_discovery.py
           python -m py_compile send_email.py
 
           python - <<'PY'
@@ -157,6 +172,26 @@ jobs:
         run: |
           set -euo pipefail
           python uk_iam_hunter.py
+
+      - name: Run priority official IAM discovery
+        env:
+          IAM_MIN_SCORE: "75"
+          IAM_SEARCH_TIMEOUT: "8"
+          IAM_JOB_TIMEOUT: "12"
+          IAM_MAX_SEARCH_RESULTS: "12"
+          IAM_RECENT_SEARCH_HINT: "posted this week"
+          SEARCH_ENGINE_MODE: "light"
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          BRAVE_SEARCH_FRESHNESS: "pw"
+          IAM_STATE_DIR: ".iam_state"
+          IAM_STATE_RETENTION_DAYS: "180"
+          IAM_NOTIFY_UPDATED_JOBS: "true"
+          USE_PLAYWRIGHT: "false"
+          ARCHIVE_TO_GOOGLE: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python iam_priority_discovery.py
 
       - name: Check V5.4 results
         shell: bash
