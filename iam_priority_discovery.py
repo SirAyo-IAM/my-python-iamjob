@@ -25,15 +25,17 @@ from typing import Any, Dict, List
 import uk_iam_hunter as hunter
 
 
-# Regression seeds are official employer/ATS job pages discovered manually or
-# by independent fresh web checks. Keeping them here is safe: closed/filled,
-# non-UK and non-permanent pages are rejected by hunter.build_result().
+# Regression seeds are employer or recruiter career pages discovered manually
+# or by an independent fresh web check. Every page is still passed through the
+# main hunter's strict UK/permanent/relevance validation before it is retained.
 DIRECT_JOB_SEEDS = [
     # Fresh September 2026 misses.
     "https://sainsburys.jobs/jobs/description/400057178",
     "https://www.sainsburys.jobs/jobs/description/400057342",
     "https://jobs.coop.co.uk/job/manchester/principal-security-architect-iam/22964/100062143088",
     "https://apply.hollandandbarrettjobs.com/jobs/vacancy/idam-security-manager-38872-london/38851/description/",
+    "https://careers.medicalprotection.org/jobs/job/Identity-and-Access-Management-Lead/2162",
+    "https://www.83zero.com/jobs/625203-IAM-Delivery-Consultant/",
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -41,7 +43,17 @@ DIRECT_JOB_SEEDS = [
     "https://cgi.njoyn.com/corp/xweb/xweb.asp?clid=21001&page=jobdetails&jobid=J0526-1965&BRID=1304115&SBDID=943&lang=1",
     "https://www.fruitiongroup.com/job/iam-platform-manager-2035/",
     "https://fa-evdq-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/11708",
-    "https://careers.givaudan.com/global/en/job/119132/Identity-Access-Management-Technologies-and-Services-Line-Manager",
+]
+
+
+# Some enterprise career platforms can serve stale JobPosting markup even after
+# the canonical vacancy page says the role has been filled. These exact known
+# closed vacancies are excluded before parsing so stale markup cannot re-enter
+# the current-results file.
+KNOWN_CLOSED_URL_FRAGMENTS = [
+    "careers.givaudan.com/global/en/job/119132/",
+    "careers.givaudan.com/global/en/job/givgivgb119132externalenglobal/",
+    "careers.givaudan.com/br/pt/job/119132/",
 ]
 
 
@@ -52,14 +64,20 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:sainsburys.jobs/jobs/description (IAM OR "Identity and Access Management" OR "Privileged Access Management")',
     'site:jobs.coop.co.uk/job (IAM OR "Identity and Access" OR "Identity Security")',
     'site:apply.hollandandbarrettjobs.com/jobs/vacancy (IAM OR IDAM OR "Identity and Access")',
+    'site:careers.medicalprotection.org/jobs/job (IAM OR "Identity and Access Management" OR SailPoint OR Delinea)',
+    'site:83zero.com/jobs (IAM OR "Identity and Access" OR SailPoint OR Saviynt OR CyberArk)',
     'site:careers.astonmartin.com (IAM OR "Identity and Access Management")',
     'site:jobs.ashbyhq.com/allica-bank (IAM OR "Identity and Access" OR "Identity Security")',
     'site:cgi.njoyn.com (IAM OR SailPoint OR CyberArk OR "Identity and Access")',
-    'site:careers.givaudan.com (IAM OR "Identity Access Management" OR PAM OR Saviynt OR CyberArk)',
     'site:oraclecloud.com/hcmUI/CandidateExperience (IAM OR "Identity and Access Management" OR SailPoint OR CyberArk) "United Kingdom"',
     'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security")',
     'site:jobs.lloydsbankinggroup.com (IAM OR "Identity and Access" OR SailPoint OR CyberArk)',
 ]
+
+
+def is_known_closed_url(url: str) -> bool:
+    low = hunter.normalise_url(url).lower()
+    return any(fragment in low for fragment in KNOWN_CLOSED_URL_FRAGMENTS)
 
 
 def read_csv(path: Path) -> List[Dict[str, Any]]:
@@ -111,6 +129,8 @@ def discover() -> List[Dict[str, Any]]:
     seen = set()
     for value in candidates:
         value = hunter.normalise_url(value)
+        if is_known_closed_url(value):
+            continue
         key = hunter.canonical_url(value)
         if not key or key in seen:
             continue
@@ -129,15 +149,26 @@ def discover() -> List[Dict[str, Any]]:
         except Exception:
             continue
 
-    return hunter.deduplicate(results)
+    return hunter.deduplicate(
+        job for job in results
+        if not is_known_closed_url(str(job.get("url", "")))
+    )
 
 
 def main() -> None:
     full_path = Path(hunter.CSV_FILE)
     new_path = Path(hunter.NEW_CSV_FILE)
 
-    current = read_csv(full_path)
-    current_notifications = read_csv(new_path)
+    # Remove exact known stale/closed rows from the current run as an additional
+    # safeguard before supplementing it.
+    current = [
+        job for job in read_csv(full_path)
+        if not is_known_closed_url(str(job.get("url", "")))
+    ]
+    current_notifications = [
+        job for job in read_csv(new_path)
+        if not is_known_closed_url(str(job.get("url", "")))
+    ]
     supplemental = discover()
 
     # Identify only jobs not already present in this run's full result set.
