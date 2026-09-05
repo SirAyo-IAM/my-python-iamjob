@@ -2,185 +2,185 @@
  * UK IAM JOB APPLICATION ARCHIVE
  * Google Apps Script backend
  *
- * Phase 1:
- * - Creates Google Sheet structure
- * - Creates Google Drive archive folder
+ * Responsibilities:
  * - Receives job/application data from Python
- * - Fetches and archives complete job pages
- * - Writes structured data to Google Sheets
+ * - Fetches and archives complete job pages in Google Drive
+ * - Writes structured records to Google Sheets
+ * - Prevents duplicate archives by canonical URL
+ *
+ * Security:
+ * - The webhook secret is stored in Apps Script Script Properties as
+ *   ARCHIVE_SECRET_TOKEN. Never commit the secret to source control.
  */
 
 const CONFIG = {
+  ARCHIVE_FOLDER_ID: "1l2vXY9cmE7C-tQJ10aLCkSRCrcCSozI7",
   ARCHIVE_FOLDER_NAME: "UK IAM Job Description Archive",
-  SECRET_TOKEN: "IAMJOBSEARCHAUGUST2026"
+  SECRET_PROPERTY_NAME: "ARCHIVE_SECRET_TOKEN"
 };
+
+const APPLICATION_HEADERS = [
+  "Application ID",
+  "Date Applied",
+  "Company",
+  "Job Title",
+  "Job Reference",
+  "Job URL",
+  "Source",
+  "Salary Min",
+  "Salary Max",
+  "Salary Text",
+  "Employment Type",
+  "Location",
+  "Working Arrangement",
+  "Status",
+  "CV Used",
+  "Matched Keywords",
+  "Job Description Archive",
+  "Match Score",
+  "Outcome",
+  "Notes",
+  "Created At",
+  "Last Updated"
+];
+
+const JOB_DESCRIPTION_HEADERS = [
+  "Application ID",
+  "Company",
+  "Job Title",
+  "Job Reference",
+  "Original URL",
+  "Canonical URL",
+  "Capture Date",
+  "HTTP Status",
+  "Page Status",
+  "Archive HTML",
+  "Archive Text",
+  "Full Job Description",
+  "Responsibilities",
+  "Requirements",
+  "Technologies",
+  "Certifications",
+  "Salary",
+  "Location",
+  "Working Arrangement",
+  "Source",
+  "Matched Keywords"
+];
+
+const RECRUITER_HEADERS = [
+  "Application ID",
+  "Recruiter Name",
+  "Company",
+  "Recruiter Type",
+  "Email",
+  "Phone",
+  "LinkedIn",
+  "First Contact",
+  "Last Contact",
+  "Notes"
+];
+
+const INTERVIEW_HEADERS = [
+  "Application ID",
+  "Interview Stage",
+  "Interview Date",
+  "Interview Type",
+  "Interviewers",
+  "Questions",
+  "Preparation",
+  "Feedback",
+  "Result",
+  "Notes"
+];
+
+const DASHBOARD_HEADERS = ["Metric", "Value"];
 
 
 /* ============================================================
-   1. CREATE / REPAIR SHEET STRUCTURE
+   1. SAFE DATABASE SETUP / REPAIR
    ============================================================ */
 
 function setupJobApplicationDatabase() {
-
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  const sheets = {
-    "Applications": [
-      "Application ID",
-      "Date Applied",
-      "Company",
-      "Job Title",
-      "Job Reference",
-      "Job URL",
-      "Source",
-      "Salary Min",
-      "Salary Max",
-      "Salary Text",
-      "Employment Type",
-      "Location",
-      "Working Arrangement",
-      "Status",
-      "CV Used",
-      "Matched Keywords",
-      "Job Description Archive",
-      "Match Score",
-      "Outcome",
-      "Notes",
-      "Created At",
-      "Last Updated"
-    ],
-
-    "Job Descriptions": [
-      "Application ID",
-      "Company",
-      "Job Title",
-      "Job Reference",
-      "Original URL",
-      "Canonical URL",
-      "Capture Date",
-      "HTTP Status",
-      "Page Status",
-      "Archive HTML",
-      "Archive Text",
-      "Full Job Description",
-      "Responsibilities",
-      "Requirements",
-      "Technologies",
-      "Certifications",
-      "Salary",
-      "Location",
-      "Working Arrangement",
-      "Source",
-      "Matched Keywords"
-    ],
-
-    "Recruiters": [
-      "Application ID",
-      "Recruiter Name",
-      "Company",
-      "Recruiter Type",
-      "Email",
-      "Phone",
-      "LinkedIn",
-      "First Contact",
-      "Last Contact",
-      "Notes"
-    ],
-
-    "Interviews": [
-      "Application ID",
-      "Interview Stage",
-      "Interview Date",
-      "Interview Type",
-      "Interviewers",
-      "Questions",
-      "Preparation",
-      "Feedback",
-      "Result",
-      "Notes"
-    ],
-
-    "Dashboard": [
-      "Metric",
-      "Value"
-    ]
-  };
-
-  Object.keys(sheets).forEach(function(sheetName) {
-
-    let sheet = ss.getSheetByName(sheetName);
-
-    if (!sheet) {
-      sheet = ss.insertSheet(sheetName);
-    }
-
-    sheet.clear();
-
-    const headers = sheets[sheetName];
-
-    sheet
-      .getRange(1, 1, 1, headers.length)
-      .setValues([headers]);
-
-    sheet
-      .getRange(1, 1, 1, headers.length)
-      .setFontWeight("bold");
-
-    sheet.setFrozenRows(1);
-
-    sheet.autoResizeColumns(
-      1,
-      headers.length
-    );
-  });
-
-  createArchiveFolder();
-
-  SpreadsheetApp.getUi().alert(
-    "UK IAM Job Application database created successfully."
-  );
-}
-
-
-/* ============================================================
-   2. CREATE GOOGLE DRIVE ARCHIVE FOLDER
-   ============================================================ */
-
-function createArchiveFolder() {
-
-  const folders = DriveApp.getFoldersByName(
-    CONFIG.ARCHIVE_FOLDER_NAME
-  );
-
-  if (folders.hasNext()) {
-    return folders.next().getId();
+  if (!ss) {
+    throw new Error("Google Spreadsheet could not be found.");
   }
 
-  const folder = DriveApp.createFolder(
-    CONFIG.ARCHIVE_FOLDER_NAME
-  );
+  ensureSheet(ss, "Applications", APPLICATION_HEADERS);
+  ensureSheet(ss, "Job Descriptions", JOB_DESCRIPTION_HEADERS);
+  ensureSheet(ss, "Recruiters", RECRUITER_HEADERS);
+  ensureSheet(ss, "Interviews", INTERVIEW_HEADERS);
+  ensureSheet(ss, "Dashboard", DASHBOARD_HEADERS);
+  getArchiveFolder();
 
-  return folder.getId();
+  SpreadsheetApp.getUi().alert(
+    "UK IAM Job Application database checked successfully. Existing data was preserved."
+  );
+}
+
+function ensureSheet(ss, sheetName, headers) {
+  let sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+
+  // Never clear an existing sheet. Only initialise headers when the sheet is empty.
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold");
+    sheet.setFrozenRows(1);
+    sheet.autoResizeColumns(1, headers.length);
+  }
+
+  return sheet;
 }
 
 
 /* ============================================================
-   3. GET ARCHIVE FOLDER
+   2. SECURITY
+   ============================================================ */
+
+function getArchiveSecretToken() {
+  const token = PropertiesService
+    .getScriptProperties()
+    .getProperty(CONFIG.SECRET_PROPERTY_NAME);
+
+  if (!token) {
+    throw new Error(
+      "Missing Script Property: " + CONFIG.SECRET_PROPERTY_NAME
+    );
+  }
+
+  return token;
+}
+
+
+/* ============================================================
+   3. GOOGLE DRIVE ARCHIVE FOLDER
    ============================================================ */
 
 function getArchiveFolder() {
+  // Use the known folder ID so a duplicate folder with the same name cannot be selected.
+  if (CONFIG.ARCHIVE_FOLDER_ID) {
+    try {
+      return DriveApp.getFolderById(CONFIG.ARCHIVE_FOLDER_ID);
+    } catch (error) {
+      throw new Error(
+        "Configured archive folder is not accessible: " + error.message
+      );
+    }
+  }
 
-  const folders = DriveApp.getFoldersByName(
-    CONFIG.ARCHIVE_FOLDER_NAME
-  );
+  const folders = DriveApp.getFoldersByName(CONFIG.ARCHIVE_FOLDER_NAME);
 
   if (folders.hasNext()) {
     return folders.next();
   }
 
-  return DriveApp.createFolder(
-    CONFIG.ARCHIVE_FOLDER_NAME
-  );
+  return DriveApp.createFolder(CONFIG.ARCHIVE_FOLDER_NAME);
 }
 
 
@@ -189,14 +189,12 @@ function getArchiveFolder() {
    ============================================================ */
 
 function canonicalUrl(url) {
-
   if (!url) {
     return "";
   }
 
   try {
-
-    const parsed = new URL(url);
+    const parsed = new URL(String(url).trim());
 
     return (
       parsed.protocol +
@@ -206,11 +204,11 @@ function canonicalUrl(url) {
     )
       .replace(/\/$/, "")
       .toLowerCase();
-
   } catch (error) {
-
     return String(url)
       .trim()
+      .split("?")[0]
+      .split("#")[0]
       .replace(/\/$/, "")
       .toLowerCase();
   }
@@ -218,43 +216,34 @@ function canonicalUrl(url) {
 
 
 /* ============================================================
-   5. CHECK WHETHER URL ALREADY EXISTS
+   5. DUPLICATE CHECK
    ============================================================ */
 
 function applicationExists(url) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss && ss.getSheetByName("Job Descriptions");
 
-  const sheet =
-    SpreadsheetApp
-      .getActiveSpreadsheet()
-      .getSheetByName("Job Descriptions");
-
-  if (!sheet) {
+  if (!sheet || sheet.getLastRow() < 2) {
     return false;
   }
 
-  const lastRow = sheet.getLastRow();
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0];
 
-  if (lastRow < 2) {
-    return false;
+  const canonicalColumn = headers.indexOf("Canonical URL") + 1;
+
+  if (canonicalColumn < 1) {
+    throw new Error("Job Descriptions sheet is missing the Canonical URL column.");
   }
-
-  const urls = sheet
-    .getRange(
-      2,
-      6,
-      lastRow - 1,
-      1
-    )
-    .getValues();
 
   const target = canonicalUrl(url);
+  const values = sheet
+    .getRange(2, canonicalColumn, sheet.getLastRow() - 1, 1)
+    .getValues();
 
-  return urls.some(function(row) {
-
-    return canonicalUrl(
-      row[0]
-    ) === target;
-
+  return values.some(function(row) {
+    return canonicalUrl(row[0]) === target;
   });
 }
 
@@ -264,65 +253,31 @@ function applicationExists(url) {
    ============================================================ */
 
 function archiveJobPage(data) {
+  if (!data || !data.url) {
+    throw new Error("No job URL supplied.");
+  }
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   if (!ss) {
     throw new Error("Google Spreadsheet could not be found.");
   }
 
-  // Get the required sheets explicitly.
-  let jobSheet = ss.getSheetByName("Job Descriptions");
-  let applicationSheet = ss.getSheetByName("Applications");
+  const applicationSheet = ensureSheet(
+    ss,
+    "Applications",
+    APPLICATION_HEADERS
+  );
 
-  // Create them if they don't exist.
-  if (!jobSheet) {
-    jobSheet = ss.insertSheet("Job Descriptions");
+  const jobSheet = ensureSheet(
+    ss,
+    "Job Descriptions",
+    JOB_DESCRIPTION_HEADERS
+  );
 
-    jobSheet.appendRow([
-      "Application ID",
-      "Company",
-      "Job Title",
-      "Job Reference",
-      "Original URL",
-      "Canonical URL",
-      "Capture Date",
-      "HTTP Status",
-      "Page Size",
-      "Employment Type",
-      "Location",
-      "Working Arrangement",
-      "Salary",
-      "Status",
-      "Matched Keywords",
-      "Archive HTML",
-      "Archive Text"
-    ]);
-  }
-
-  if (!applicationSheet) {
-    applicationSheet = ss.insertSheet("Applications");
-
-    applicationSheet.appendRow([
-      "Application ID",
-      "Company",
-      "Job Title",
-      "Job Reference",
-      "Original URL",
-      "Canonical URL",
-      "Application Date",
-      "Status",
-      "Notes"
-    ]);
-  }
-
-  if (!data || !data.url) {
-    throw new Error("No job URL supplied.");
-  }
-
-  const originalUrl = String(data.url);
+  const originalUrl = String(data.url).trim();
   const canonical = canonicalUrl(originalUrl);
 
-  // Prevent duplicate archives.
   if (applicationExists(canonical)) {
     return {
       success: true,
@@ -332,7 +287,6 @@ function archiveJobPage(data) {
     };
   }
 
-  // Fetch the job page.
   let response;
 
   try {
@@ -344,20 +298,21 @@ function archiveJobPage(data) {
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36"
       }
     });
-  } catch (err) {
-    throw new Error(
-      "Unable to fetch job page: " + err.message
-    );
+  } catch (error) {
+    throw new Error("Unable to fetch job page: " + error.message);
   }
 
   const httpStatus = response.getResponseCode();
   const html = response.getContentText();
 
-  if (!html) {
+  if (httpStatus >= 400) {
+    throw new Error("Job page returned HTTP " + httpStatus + ".");
+  }
+
+  if (!html || !html.trim()) {
     throw new Error("Job page returned no content.");
   }
 
-  // Convert HTML to readable text.
   const readableText = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -366,11 +321,13 @@ function archiveJobPage(data) {
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
     .replace(/\s+/g, " ")
     .trim();
 
-  const applicationId = createApplicationId();
   const captureDate = new Date();
+  const applicationId = createApplicationId(applicationSheet);
 
   const company = data.company || "";
   const jobTitle = data.title || data.jobTitle || "";
@@ -379,40 +336,39 @@ function archiveJobPage(data) {
   const location = data.location || "";
   const workingArrangement =
     data.working_arrangement || data.workingArrangement || "";
-  const salary = data.salary || "";
+  const salary = data.salary || data.salary_text || "";
+  const salaryMin = data.salary_min || "";
+  const salaryMax = data.salary_max || "";
+  const source = data.source || "";
   const status = data.status || "Discovered";
-  const matchedKeywords =
-    data.matched_keywords ||
-    data.matchedKeywords ||
-    "";
-
-  // Create safe filename.
-  const filename = sanitiseFilename(
-    company + " - " + jobTitle + " - " + jobReference
+  const dateApplied = data.date_applied || data.dateApplied || "";
+  const cvUsed = data.cv_used || data.cvUsed || "";
+  const matchScore = data.match_score || data.matchScore || "";
+  const matchedKeywords = normaliseListValue(
+    data.matched_keywords || data.matchedKeywords || ""
   );
 
-  // Get/create Drive archive folder.
+  const filename = sanitiseFilename(
+    [company, jobTitle, jobReference].filter(Boolean).join(" - ") || applicationId
+  );
+
   const folder = getArchiveFolder();
 
-  // Save complete HTML.
   const htmlFile = folder.createFile(
     filename + ".html",
     html,
     MimeType.HTML
   );
 
-  // Save readable text.
   const textFile = folder.createFile(
     filename + ".txt",
     readableText,
     MimeType.PLAIN_TEXT
   );
 
-  // Store archive links.
   const htmlLink = htmlFile.getUrl();
   const textLink = textFile.getUrl();
 
-  // Write to Job Descriptions.
   jobSheet.appendRow([
     applicationId,
     company,
@@ -422,28 +378,44 @@ function archiveJobPage(data) {
     canonical,
     captureDate,
     httpStatus,
-    html.length,
-    employmentType,
+    "Captured",
+    htmlLink,
+    textLink,
+    readableText,
+    normaliseListValue(data.responsibilities || ""),
+    normaliseListValue(data.requirements || ""),
+    normaliseListValue(data.technologies || ""),
+    normaliseListValue(data.certifications || ""),
+    salary,
     location,
     workingArrangement,
-    salary,
-    status,
-    matchedKeywords,
-    htmlLink,
-    textLink
+    source,
+    matchedKeywords
   ]);
 
-  // Write to Applications.
   applicationSheet.appendRow([
     applicationId,
+    dateApplied,
     company,
     jobTitle,
     jobReference,
     originalUrl,
-    canonical,
-    captureDate,
+    source,
+    salaryMin,
+    salaryMax,
+    salary,
+    employmentType,
+    location,
+    workingArrangement,
     status,
-    "Automatically discovered and archived."
+    cvUsed,
+    matchedKeywords,
+    textLink,
+    matchScore,
+    data.outcome || "",
+    data.notes || "Automatically discovered and archived.",
+    captureDate,
+    captureDate
   ]);
 
   return {
@@ -459,42 +431,53 @@ function archiveJobPage(data) {
     textArchive: textLink
   };
 }
+
+
 /* ============================================================
    7. CREATE APPLICATION ID
    ============================================================ */
 
-function createApplicationId() {
+function createApplicationId(applicationSheet) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
 
-  const sheet =
-    SpreadsheetApp
-      .getActiveSpreadsheet()
-      .getSheetByName(
-        "Applications"
-      );
+  try {
+    const sheet = applicationSheet ||
+      SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Applications");
 
-  const lastRow =
-    sheet.getLastRow();
+    if (!sheet) {
+      return "APP-0001";
+    }
 
-  let nextNumber =
-    Math.max(
-      1,
-      lastRow
-    );
+    const lastRow = sheet.getLastRow();
 
-  return (
-    "APP-" +
-    String(nextNumber)
-      .padStart(4, "0")
-  );
+    if (lastRow < 2) {
+      return "APP-0001";
+    }
+
+    const ids = sheet
+      .getRange(2, 1, lastRow - 1, 1)
+      .getValues()
+      .flat()
+      .map(function(value) {
+        const match = String(value).match(/^APP-(\d+)$/i);
+        return match ? Number(match[1]) : 0;
+      });
+
+    const nextNumber = Math.max.apply(null, [0].concat(ids)) + 1;
+
+    return "APP-" + String(nextNumber).padStart(4, "0");
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 
 /* ============================================================
-   8. CLEAN FILENAMES
+   8. HELPERS
    ============================================================ */
 
 function sanitiseFilename(value) {
-
   return String(value)
     .replace(/[\\/:*?"<>|]/g, "")
     .replace(/\s+/g, " ")
@@ -502,55 +485,51 @@ function sanitiseFilename(value) {
     .substring(0, 100);
 }
 
+function normaliseListValue(value) {
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+
+  return value == null ? "" : String(value);
+}
+
 
 /* ============================================================
-   9. WEB APP POST ENDPOINT
+   9. WEB APP ENDPOINTS
    ============================================================ */
 
+function doGet() {
+  return jsonResponse({
+    success: true,
+    service: "UK IAM Job Application Archive",
+    status: "ready"
+  });
+}
+
 function doPost(e) {
-
   try {
-
-    if (!e || !e.postData) {
-
+    if (!e || !e.postData || !e.postData.contents) {
       return jsonResponse({
         success: false,
         error: "No POST data received."
       });
     }
 
+    const payload = JSON.parse(e.postData.contents);
+    const expectedToken = getArchiveSecretToken();
 
-    const payload =
-      JSON.parse(
-        e.postData.contents
-      );
-
-
-    /*
-     * Security token.
-     */
-
-    if (
-      payload.token !==
-      CONFIG.SECRET_TOKEN
-    ) {
-
+    if (!payload.token || payload.token !== expectedToken) {
       return jsonResponse({
         success: false,
         error: "Invalid token."
       });
     }
 
+    delete payload.token;
 
-    const result =
-      archiveJobPage(payload);
-
-
-    return jsonResponse(
-      result
-    );
-
+    return jsonResponse(archiveJobPage(payload));
   } catch (error) {
+    console.error(error);
 
     return jsonResponse({
       success: false,
@@ -565,85 +544,37 @@ function doPost(e) {
    ============================================================ */
 
 function jsonResponse(data) {
-
   return ContentService
-    .createTextOutput(
-      JSON.stringify(data)
-    )
-    .setMimeType(
-      ContentService.MimeType.JSON
-    );
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 
 /* ============================================================
-   11. TEST SSE JOB
+   11. MANUAL ARCHIVE TEST
    ============================================================ */
 
 function testSSEJob() {
-
   const testData = {
-
-    token:
-      CONFIG.SECRET_TOKEN,
-
-    application_id:
-      "APP-0001",
-
-    date_applied:
-      "2026-08-22",
-
-    company:
-      "SSE",
-
-    title:
-      "Product Owner – Identity " +
-      "(Identity Governance & Administration)",
-
-    job_reference:
-      "559224",
-
+    application_id: "APP-0001",
+    date_applied: "2026-08-22",
+    company: "SSE",
+    title: "Product Owner – Identity (Identity Governance & Administration)",
+    job_reference: "559224",
     url:
       "https://careers.sse.com/jobs/" +
       "product-owner-identity-identity-governance-" +
       "administration-portsmouth-united-kingdom-" +
       "reading-berkshire-berkshire",
-
-    source:
-      "SSE Careers",
-
-    salary:
-      "£59,800–£89,800 + bonus",
-
-    location:
-      "Reading / Havant",
-
-    working_arrangement:
-      "Hybrid",
-
-    employment_type:
-      "Permanent",
-
-    status:
-      "Applied",
-
-    matched_keywords:
-      "Identity, Identity Governance, IGA, SailPoint"
-
+    source: "SSE Careers",
+    salary: "£59,800–£89,800 + bonus",
+    location: "Reading / Havant",
+    working_arrangement: "Hybrid",
+    employment_type: "Permanent",
+    status: "Applied",
+    matched_keywords: "Identity, Identity Governance, IGA, SailPoint"
   };
 
-
-  const result =
-    archiveJobPage(
-      testData
-    );
-
-
-  Logger.log(
-    JSON.stringify(
-      result,
-      null,
-      2
-    )
-  );
+  const result = archiveJobPage(testData);
+  Logger.log(JSON.stringify(result, null, 2));
 }
