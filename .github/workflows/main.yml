@@ -128,8 +128,6 @@ jobs:
       - name: Run UK IAM Hunter V5.4
         env:
           IAM_MIN_SCORE: "75"
-
-          # Bounded CI settings.
           IAM_MAX_WORKERS: "8"
           IAM_REQUEST_TIMEOUT: "12"
           IAM_SEARCH_TIMEOUT: "8"
@@ -138,34 +136,23 @@ jobs:
           IAM_MAX_JOB_LINKS_PER_COMPANY: "40"
           IAM_MAX_SITEMAP_URLS: "500"
           IAM_COMPANY_SCAN_SECONDS: "75"
-
-          # Fresh open-ended discovery.
           USE_GLOBAL_DISCOVERY: "true"
           USE_SEARCH_DISCOVERY: "true"
           GLOBAL_SEARCH_QUERY_LIMIT: "18"
           MAX_GLOBAL_CANDIDATES: "180"
           MAX_LISTING_LINKS: "80"
           IAM_RECENT_SEARCH_HINT: "posted this week"
-
-          # Use the stable API with a 7-day freshness window when configured.
           BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
           BRAVE_SEARCH_FRESHNESS: "pw"
-
-          # Avoid N searches for every fallback company.
           USE_COMPANY_SEARCH_DISCOVERY: "false"
-
           SEARCH_ENGINE_MODE: "light"
-
-          # Keep bounded runtime.
           USE_PLAYWRIGHT: "false"
           IAM_PLAYWRIGHT_BUDGET: "10"
-
-          # Persistent cross-run dedupe.
           IAM_STATE_DIR: ".iam_state"
           IAM_STATE_RETENTION_DAYS: "180"
           IAM_NOTIFY_UPDATED_JOBS: "true"
 
-          # Deliberately OFF until job-search quality is accepted.
+          # Archive once, after main + priority discovery have been merged.
           ARCHIVE_TO_GOOGLE: "false"
 
         shell: bash
@@ -192,6 +179,47 @@ jobs:
         run: |
           set -euo pipefail
           python iam_priority_discovery.py
+
+      - name: Archive NEW and UPDATED jobs to Google
+        env:
+          ARCHIVE_TO_GOOGLE: "true"
+          GOOGLE_APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbxxaMKke-BegXAeKYvADxkuvA1R0LIdipNTh_5JOeqA-y53kxSa9OTX_UbBZ6E4FjKNcQ/exec"
+          GOOGLE_APPS_SCRIPT_TOKEN: ${{ secrets.GOOGLE_APPS_SCRIPT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "${GOOGLE_APPS_SCRIPT_TOKEN:-}" || {
+            echo "ERROR: GOOGLE_APPS_SCRIPT_TOKEN repository secret is missing."
+            exit 1
+          }
+
+          python - <<'PY'
+          import csv
+          import uk_iam_hunter as hunter
+
+          with open("uk_iam_new_results.csv", encoding="utf-8-sig", newline="") as handle:
+              jobs = list(csv.DictReader(handle))
+
+          if not jobs:
+              print("No NEW/UPDATED jobs to archive.")
+              raise SystemExit(0)
+
+          archived = 0
+          failed = []
+          for job in jobs:
+              if hunter.archive_to_google(job):
+                  archived += 1
+              else:
+                  failed.append(job.get("url", "<missing URL>"))
+
+          print(f"Google archive: {archived}/{len(jobs)} jobs accepted.")
+          if failed:
+              print("Archive failures:")
+              for url in failed[:20]:
+                  print(" -", url)
+              raise SystemExit("ERROR: one or more Google archive requests failed.")
+          PY
 
       - name: Check V5.4 results
         shell: bash
