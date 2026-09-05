@@ -33,9 +33,13 @@ DIRECT_JOB_SEEDS = [
     "https://sainsburys.jobs/jobs/description/400057178",
     "https://www.sainsburys.jobs/jobs/description/400057342",
     "https://jobs.coop.co.uk/job/manchester/principal-security-architect-iam/22964/100062143088",
+    "https://jobs.coop.co.uk/job/manchester/principal-identity-and-access-manager/22964/99792609072",
     "https://apply.hollandandbarrettjobs.com/jobs/vacancy/idam-security-manager-38872-london/38851/description/",
     "https://careers.medicalprotection.org/jobs/job/Identity-and-Access-Management-Lead/2162",
     "https://www.83zero.com/jobs/625203-IAM-Delivery-Consultant/",
+    "https://www.lloydsbankinggroup.com/careers/job-search/workday-job.161635.html",
+    "https://www.lloydsbankinggroup.com/careers/job-search/workday-job.161727.html",
+    "https://careers.ey.com/ey/job/London-Senior-Consultant%2C-Cyber%2C-FS-E14-5EY/1168991101/",
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -70,8 +74,9 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:jobs.ashbyhq.com/allica-bank (IAM OR "Identity and Access" OR "Identity Security")',
     'site:cgi.njoyn.com (IAM OR SailPoint OR CyberArk OR "Identity and Access")',
     'site:oraclecloud.com/hcmUI/CandidateExperience (IAM OR "Identity and Access Management" OR SailPoint OR CyberArk) "United Kingdom"',
-    'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security")',
+    'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security" OR "Privileged Access")',
     'site:jobs.lloydsbankinggroup.com (IAM OR "Identity and Access" OR SailPoint OR CyberArk)',
+    'site:careers.ey.com/ey/job (IAM OR "Identity and Access Management" OR "Identity Security") "London"',
 ]
 
 
