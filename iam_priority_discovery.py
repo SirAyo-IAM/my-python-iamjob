@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List
+
+from bs4 import BeautifulSoup
 
 import uk_iam_hunter as hunter
 
@@ -85,6 +88,81 @@ def is_known_closed_url(url: str) -> bool:
     return any(fragment in low for fragment in KNOWN_CLOSED_URL_FRAGMENTS)
 
 
+def is_lloyds_job_url(url: str) -> bool:
+    return (
+        hunter.host(url).endswith("lloydsbankinggroup.com")
+        and "/careers/job-search/workday-job." in url.lower()
+    )
+
+
+def extract_lloyds_result(url: str) -> List[Dict[str, Any]]:
+    """Parse Lloyds' public Workday wrapper pages before generic extraction.
+
+    Lloyds pages expose the job details as visible HTML but do not consistently
+    provide JobPosting JSON-LD, and the generic location extractor can miss the
+    labelled multi-city location. Keep this adapter narrow and still pass the
+    result through the main hunter's UK/permanent/relevance validation.
+    """
+    if not is_lloyds_job_url(url):
+        return []
+
+    fetched = hunter.fetch_candidate_page(url)
+    if not fetched:
+        return []
+
+    html_content, final_url = fetched
+    soup = BeautifulSoup(html_content, "html.parser")
+    text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
+
+    heading = soup.find("h1")
+    title = heading.get_text(" ", strip=True) if heading else hunter.page_title(soup)
+    title = re.sub(r"\s*-\s*Lloyds Banking Group plc\s*$", "", title, flags=re.I).strip()
+
+    location = ""
+    location_match = re.search(
+        r"\bLocation\s+(.+?)(?=\s+End date\b|\s+Job type\b|\s+Posted date\b)",
+        text,
+        re.I,
+    )
+    if location_match:
+        location = re.sub(r"\s+", " ", location_match.group(1)).strip(" ,-|")
+
+    employment_type = ""
+    employment_match = re.search(
+        r"\bJob type\s+(.+?)(?=\s+Posted date\b|\s+Job Description\b|\s+We're\b)",
+        text,
+        re.I,
+    )
+    if employment_match:
+        employment_type = re.sub(r"\s+", " ", employment_match.group(1)).strip(" ,-|")
+
+    salary = ""
+    salary_match = re.search(
+        r"\bSalary range\s+(£\s?[\d,]+\s*-\s*£\s?[\d,]+)",
+        text,
+        re.I,
+    )
+    if salary_match:
+        salary = salary_match.group(1).replace("£ ", "£").strip()
+
+    company = (
+        "Lloyds Banking Group",
+        ["lloydsbankinggroup.com"],
+        [],
+    )
+    result = hunter.build_result(
+        company=company,
+        title=title,
+        description=text,
+        location=location,
+        url=final_url,
+        method="V5.4 priority official discovery -> Lloyds Workday wrapper",
+        employment_type=employment_type,
+        salary=salary,
+    )
+    return [result] if result else []
+
+
 def read_csv(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
@@ -145,6 +223,11 @@ def discover() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     for url in unique_urls:
         try:
+            if is_lloyds_job_url(url):
+                lloyds_results = extract_lloyds_result(url)
+                if lloyds_results:
+                    results.extend(lloyds_results)
+                    continue
             results.extend(
                 hunter.extract_results_from_candidate(
                     url,
