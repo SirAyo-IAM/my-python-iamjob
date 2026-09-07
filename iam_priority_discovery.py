@@ -43,6 +43,9 @@ DIRECT_JOB_SEEDS = [
     "https://www.lloydsbankinggroup.com/careers/job-search/workday-job.161635.html",
     "https://www.lloydsbankinggroup.com/careers/job-search/workday-job.161727.html",
     "https://careers.ey.com/ey/job/London-Senior-Consultant%2C-Cyber%2C-FS-E14-5EY/1168991101/",
+    "https://chetwood-bank.pinpointhq.com/postings/127b579f-97af-4d87-9da3-8f33672d366a",
+    "https://accenture.wd103.myworkdayjobs.com/en-US/AccentureCareers/job/PAM-Consultant---London_R00310618",
+    "https://careers.hippodigital.co.uk/vacancies/1489/principal-business-analyst-identity.html",
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -80,6 +83,10 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security" OR "Privileged Access")',
     'site:jobs.lloydsbankinggroup.com (IAM OR "Identity and Access" OR SailPoint OR CyberArk)',
     'site:careers.ey.com/ey/job (IAM OR "Identity and Access Management" OR "Identity Security") "London"',
+    'site:chetwood-bank.pinpointhq.com/postings (IAM OR "Identity and Access" OR Entra)',
+    'site:accenture.wd103.myworkdayjobs.com/AccentureCareers (IAM OR PAM OR CyberArk OR SailPoint OR Saviynt OR Okta) "United Kingdom"',
+    'site:careers.hippodigital.co.uk/vacancies (IAM OR Identity OR SailPoint OR Okta OR Entra)',
+    'site:careers.aviva.co.uk/apply (CyberArk OR PAM OR "Privileged Access" OR IAM)',
 ]
 
 
