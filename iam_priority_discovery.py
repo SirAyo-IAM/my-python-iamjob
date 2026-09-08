@@ -46,6 +46,10 @@ DIRECT_JOB_SEEDS = [
     "https://chetwood-bank.pinpointhq.com/postings/127b579f-97af-4d87-9da3-8f33672d366a",
     "https://accenture.wd103.myworkdayjobs.com/en-US/AccentureCareers/job/PAM-Consultant---London_R00310618",
     "https://careers.hippodigital.co.uk/vacancies/1489/principal-business-analyst-identity.html",
+    # Verified live official/ATS roles missed by the 07 Sep current-results set.
+    "https://ybscareers.co.uk/job/identity-engineer-in-bradford.1338",
+    "https://jobs.jobvite.com/maplesandcalder/job/onoBAfwG",
+    "https://cgi.njoyn.com/corp/xweb/xweb.asp?BRID=1174217&Jobid=J1124-2743&NTKN=c&Page=JobDetails&clid=21001&lang=2",
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -87,6 +91,10 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:accenture.wd103.myworkdayjobs.com/AccentureCareers (IAM OR PAM OR CyberArk OR SailPoint OR Saviynt OR Okta) "United Kingdom"',
     'site:careers.hippodigital.co.uk/vacancies (IAM OR Identity OR SailPoint OR Okta OR Entra)',
     'site:careers.aviva.co.uk/apply (CyberArk OR PAM OR "Privileged Access" OR IAM)',
+    'site:ybscareers.co.uk/job (IAM OR Identity OR Entra OR SSO) Bradford Leeds',
+    'site:jobs.jobvite.com/maplesandcalder (IAM OR "Identity and Access" OR CyberArk OR SailPoint OR Okta)',
+    'site:cgi.njoyn.com/corp/xweb (CyberArk OR IAM OR SailPoint OR Saviynt) Reading "United Kingdom"',
+    'site:careers.computershare.com (Identity OR IAM OR Entra OR Federation) Bristol London',
 ]
 
 
