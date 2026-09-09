@@ -46,10 +46,13 @@ DIRECT_JOB_SEEDS = [
     "https://chetwood-bank.pinpointhq.com/postings/127b579f-97af-4d87-9da3-8f33672d366a",
     "https://accenture.wd103.myworkdayjobs.com/en-US/AccentureCareers/job/PAM-Consultant---London_R00310618",
     "https://careers.hippodigital.co.uk/vacancies/1489/principal-business-analyst-identity.html",
-    # Verified live official/ATS roles missed by the 07 Sep current-results set.
+    # Verified live official/ATS roles missed by recent current-results sets.
     "https://ybscareers.co.uk/job/identity-engineer-in-bradford.1338",
     "https://jobs.jobvite.com/maplesandcalder/job/onoBAfwG",
     "https://cgi.njoyn.com/corp/xweb/xweb.asp?BRID=1174217&Jobid=J1124-2743&NTKN=c&Page=JobDetails&clid=21001&lang=2",
+    "https://blackrock.wd1.myworkdayjobs.com/en-US/BlackRock_Professional/job/Identity-Security-Engineering---SailPoint--Vice-President_R265089",
+    "https://statestreet.wd1.myworkdayjobs.com/en-US/Global/job/Infrastructure-Access-Product-Owner--Vice-President_R-795863",
+    "https://jobs.lever.co/cyderes/b240768a-a7d6-4431-8e35-e50a99ed8aac",
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -95,6 +98,9 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:jobs.jobvite.com/maplesandcalder (IAM OR "Identity and Access" OR CyberArk OR SailPoint OR Okta)',
     'site:cgi.njoyn.com/corp/xweb (CyberArk OR IAM OR SailPoint OR Saviynt) Reading "United Kingdom"',
     'site:careers.computershare.com (Identity OR IAM OR Entra OR Federation) Bristol London',
+    'site:blackrock.wd1.myworkdayjobs.com/BlackRock_Professional ("Identity Security" OR SailPoint OR IAM OR IGA) Edinburgh',
+    'site:statestreet.wd1.myworkdayjobs.com/Global ("Infrastructure Access" OR CyberArk OR IAM OR "Identity and Access") London',
+    'site:jobs.lever.co/cyderes (IAM OR SailPoint OR CyberArk OR "Identity Services") "Reading, UK"',
 ]
 
 
