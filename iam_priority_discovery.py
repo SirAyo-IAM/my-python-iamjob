@@ -50,11 +50,15 @@ DIRECT_JOB_SEEDS = [
     "https://ybscareers.co.uk/job/identity-engineer-in-bradford.1338",
     "https://jobs.jobvite.com/maplesandcalder/job/onoBAfwG",
     "https://cgi.njoyn.com/corp/xweb/xweb.asp?BRID=1174217&Jobid=J1124-2743&NTKN=c&Page=JobDetails&clid=21001&lang=2",
+    "https://cgi.njoyn.com/CORP/xweb/xweb.asp?BRID=1174218&Jobid=J1124-2744&NTKN=c&Page=JobDetails&clid=21001&lang=6",
     "https://blackrock.wd1.myworkdayjobs.com/en-US/BlackRock_Professional/job/Identity-Security-Engineering---SailPoint--Vice-President_R265089",
     "https://statestreet.wd1.myworkdayjobs.com/en-US/Global/job/Infrastructure-Access-Product-Owner--Vice-President_R-795863",
     "https://jobs.lever.co/cyderes/b240768a-a7d6-4431-8e35-e50a99ed8aac",
     "https://careers.capgemini.com/job/Inverness-Cloud-IAM-Support-Engineer/1389253333/",
     "https://careers.legalandgeneral.com/job/identity-and-access-management-team-lead-in-brighton-and-hove-jid-9055",
+    "https://bupa.wd3.myworkdayjobs.com/ext_career/job/Identity-and-Access-Management-Product-Lead_R1224210",
+    "https://fca.wd3.myworkdayjobs.com/en-US/FCA_Careers/job/London/Senior-Cyber-Security-Engineer_JR0022061-1",
+    "https://morningstar.wd5.myworkdayjobs.com/en-US/morningstar/job/London/Lead-IAM-Engineer_REQ-057147",
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -105,6 +109,9 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:jobs.lever.co/cyderes (IAM OR SailPoint OR CyberArk OR "Identity Services") "Reading, UK"',
     'site:careers.capgemini.com/job (IAM OR "Identity Access Management" OR Entra OR Okta OR BeyondTrust) (Manchester OR Inverness)',
     'site:careers.legalandgeneral.com/job (IAM OR "Identity and Access Management" OR PAM OR JML) (Hove OR Brighton)',
+    'site:bupa.wd3.myworkdayjobs.com/ext_career (IAM OR "Identity and Access Management" OR IGA OR PAM) "United Kingdom"',
+    'site:fca.wd3.myworkdayjobs.com/FCA_Careers (IAM OR IDAM OR Saviynt OR Delinea OR Entra) (London OR Leeds OR Edinburgh)',
+    'site:morningstar.wd5.myworkdayjobs.com/morningstar (IAM OR Okta OR "Identity and Access" OR Entra) London',
 ]
 
 
