@@ -59,6 +59,8 @@ DIRECT_JOB_SEEDS = [
     "https://bupa.wd3.myworkdayjobs.com/ext_career/job/Identity-and-Access-Management-Product-Lead_R1224210",
     "https://fca.wd3.myworkdayjobs.com/en-US/FCA_Careers/job/London/Senior-Cyber-Security-Engineer_JR0022061-1",
     "https://morningstar.wd5.myworkdayjobs.com/en-US/morningstar/job/London/Lead-IAM-Engineer_REQ-057147",
+    "https://jobs.sizewellc.com/job/London-Identity-and-Access-Management-Lead-EC2R-7BP/1435888933/",
+    "https://www.accenture.com/gb-en/careers/jobdetails?id=R00325732_en",
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -112,6 +114,8 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:bupa.wd3.myworkdayjobs.com/ext_career (IAM OR "Identity and Access Management" OR IGA OR PAM) "United Kingdom"',
     'site:fca.wd3.myworkdayjobs.com/FCA_Careers (IAM OR IDAM OR Saviynt OR Delinea OR Entra) (London OR Leeds OR Edinburgh)',
     'site:morningstar.wd5.myworkdayjobs.com/morningstar (IAM OR Okta OR "Identity and Access" OR Entra) London',
+    'site:jobs.sizewellc.com/job (IAM OR "Identity and Access Management" OR IGA OR PAM OR Entra) "United Kingdom"',
+    'site:accenture.com/gb-en/careers/jobdetails (IAM OR IGA OR SailPoint OR Saviynt OR Okta OR Entra OR CyberArk) "England"',
 ]
 
 
