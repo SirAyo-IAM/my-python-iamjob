@@ -32,6 +32,60 @@ BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
 REQUEST_TIMEOUT = 30
 MAX_EMAIL_ROWS = 100
 
+# Application guidance is deliberately kept downstream of discovery.
+# It does not affect whether a vacancy is accepted, scored, deduplicated,
+# or treated as permanent/UK.  These labels map to the CV families the
+# user maintains in the ChatGPT IAM Hunter project.
+CV_GENERAL = "Identity & Access Administrator"
+CV_OPERATIONAL = "Operational IAM Engineer"
+CV_PAM = "Identity & Privileged Access Engineer"
+CV_SAILPOINT = "SailPoint IdentityIQ Engineer"
+CV_OKTA = "IAM Engineer - Okta / SSO / CIAM"
+
+
+def recommend_cv(job: Dict[str, str]) -> str:
+    """Choose the closest CV family from already-validated job signals.
+
+    This is intentionally conservative and presentation-only.  Specific
+    platform CVs win over the general IAM CV when the vacancy explicitly
+    signals that platform.
+    """
+    haystack = " ".join(
+        str(job.get(field, "") or "")
+        for field in (
+            "title",
+            "matched_keywords",
+            "match_type",
+            "description",
+        )
+    ).lower()
+
+    if any(term in haystack for term in (
+        "sailpoint", "identityiq", "identity iq", "identitynow",
+        "identity security cloud",
+    )):
+        return CV_SAILPOINT
+
+    if any(term in haystack for term in (
+        "okta", "ciam", "customer identity", "auth0",
+    )):
+        return CV_OKTA
+
+    if any(term in haystack for term in (
+        "cyberark", "beyondtrust", "delinea",
+        "privileged access management", "pam engineer", "pam analyst",
+        "privileged identity",
+    )):
+        return CV_PAM
+
+    if any(term in haystack for term in (
+        "entra id", "microsoft entra", "azure ad", "azure active directory",
+        "conditional access", "azure ad connect", "microsoft graph",
+    )):
+        return CV_OPERATIONAL
+
+    return CV_GENERAL
+
 
 def require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -78,7 +132,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     if not jobs:
         rows = """
         <tr>
-          <td colspan="13" style="padding:16px;text-align:center;">
+          <td colspan="14" style="padding:16px;text-align:center;">
             No new UK IAM/PAM vacancies were found in this run.
           </td>
         </tr>
@@ -101,6 +155,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
             score = safe(job.get("match_score", ""))
             confidence = safe(job.get("confidence", ""))
             keywords = safe(job.get("matched_keywords", ""))
+            recommended_cv = safe(recommend_cv(job))
 
             if url:
                 role = (
@@ -126,6 +181,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
                   <td>{employment}</td>
                   <td>{salary}</td>
                   <td>{posted}</td>
+                  <td>{recommended_cv}</td>
                   <td>{keywords}</td>
                 </tr>
                 """
@@ -179,6 +235,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Employment</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Salary</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">Posted</th>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;">Recommended CV</th>
             <th style="text-align:left;padding:8px;border:1px solid #ddd;">IAM signals</th>
           </tr>
         </thead>
