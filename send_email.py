@@ -21,14 +21,14 @@ CV_OKTA = "IAM Engineer - Okta / SSO / CIAM"
 # Last-line notification guard. Discovery remains authoritative, but the email
 # must not advertise known aggregators or clearly non-IAM commercial/ops roles.
 BLOCKED_EMAIL_DOMAINS = {
-    "dreamworkhq.com", "jobsinuk.app", "vercida.com",
+    "dreamworkhq.com", "jobsinuk.app", "vercida.com", "jobtoday.com",
     "linkedin.com", "indeed.com", "reed.co.uk", "totaljobs.com",
     "cv-library.co.uk", "glassdoor.com",
 }
 NON_IAM_TITLE_TERMS = (
     "product marketing", "marketing manager", "sales engineer",
     "customer success manager", "cloud operations engineer",
-    "cyber security jobs", "technology jobs",
+    "cyber security jobs", "technology jobs", "create job alerts",
 )
 
 def recommend_cv(job: Dict[str, str]) -> str:
