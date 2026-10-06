@@ -19,7 +19,8 @@ CV_SAILPOINT = "SailPoint IdentityIQ Engineer"
 CV_OKTA = "IAM Engineer - Okta / SSO / CIAM"
 
 # Last-line notification guard. Discovery remains authoritative, but the email
-# must not advertise known aggregators or clearly non-IAM commercial/ops roles.
+# must not advertise known aggregators, clearly non-IAM roles, or obviously
+# foreign vacancies accidentally labelled UK-confirmed upstream.
 BLOCKED_EMAIL_DOMAINS = {
     "dreamworkhq.com", "jobsinuk.app", "vercida.com", "jobtoday.com",
     "linkedin.com", "indeed.com", "reed.co.uk", "totaljobs.com",
@@ -29,6 +30,16 @@ NON_IAM_TITLE_TERMS = (
     "product marketing", "marketing manager", "sales engineer",
     "customer success manager", "cloud operations engineer",
     "cyber security jobs", "technology jobs", "create job alerts",
+)
+UK_LOCATION_TERMS = (
+    "united kingdom", " uk", "uk ", "england", "scotland", "wales",
+    "northern ireland", "london", "manchester", "birmingham", "edinburgh",
+    "glasgow", "bristol", "leeds", "reading", "cardiff", "belfast",
+)
+CLEAR_FOREIGN_LOCATION_TERMS = (
+    "canada", "metro vancouver", "united states", " usa", "u.s.",
+    "australia", "india", "singapore", "germany", "france", "spain",
+    "netherlands", "ireland", "czechia", "poland", "romania",
 )
 
 def recommend_cv(job: Dict[str, str]) -> str:
@@ -45,6 +56,13 @@ def email_worthy(job: Dict[str, str]) -> bool:
     url = str(job.get("url") or job.get("canonical_url") or "").strip()
     host = (urlparse(url).hostname or "").lower()
     if any(host == d or host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS): return False
+    location = " " + str(job.get("location", "") or "").strip().lower() + " "
+    # Preserve legitimate multi-country adverts when they explicitly include a
+    # UK location, but suppress unmistakably foreign-only locations. This is a
+    # notification safety net; the Hunter remains responsible for classification.
+    has_uk = any(term in location for term in UK_LOCATION_TERMS)
+    has_foreign = any(term in location for term in CLEAR_FOREIGN_LOCATION_TERMS)
+    if has_foreign and not has_uk: return False
     return True
 
 def require_env(name: str) -> str:
