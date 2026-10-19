@@ -103,7 +103,7 @@ def send_report(api_key: str, payload: Dict[str,object]) -> str:
 
 def main() -> None:
     raw_jobs=read_jobs(RESULT_CSV)
-    jobs=[job for job in raw_jobs if email_worthy(job)]
+    jobs=[job for job in raw_jobs if job.get("notification_status", "").strip().upper() == "NEW" and email_worthy(job)]
     suppressed=len(raw_jobs)-len(jobs)
     if suppressed: print(f"Suppressed {suppressed} non-IAM/non-official notification candidate(s).")
     if not jobs:
