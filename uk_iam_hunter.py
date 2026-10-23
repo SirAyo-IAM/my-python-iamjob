@@ -1197,6 +1197,7 @@ ATS_BOARDS = [
     ("Checkout.com", "greenhouse", "checkoutcom"),
     ("Darktrace", "greenhouse", "darktrace"),
     ("Sophos", "lever", "sophos"),
+    ("Netcompany", "smartrecruiters", "Netcompany1"),
     ("Revolut", "lever", "revolut"),
     ("Canonical", "lever", "canonical"),
     ("Starling Bank", "workable", "starling-bank"),
@@ -4634,6 +4635,88 @@ def scan_lever(
     return results
 
 
+def scan_smartrecruiters(
+    company_name: str,
+    board: str,
+) -> List[Dict[str, Any]]:
+    """Read active IAM postings from an employer's public SmartRecruiters API."""
+    results: List[Dict[str, Any]] = []
+    session = make_session()
+    seen_ids: Set[str] = set()
+    api_base = f"https://api.smartrecruiters.com/v1/companies/{board}/postings"
+    title_terms = (
+        "iam", "idam", "identity", "privileged access", "pam",
+        "sailpoint", "saviynt", "cyberark", "okta", "entra", "sso",
+        "access governance",
+    )
+    for query in ("IAM", "identity", "PAM"):
+        try:
+            response = session.get(
+                api_base,
+                params={"q": query, "limit": 100, "destination": "PUBLIC"},
+                timeout=12,
+            )
+            if response.status_code != 200:
+                continue
+            postings = response.json().get("content", [])
+            if not isinstance(postings, list):
+                continue
+            for posting in postings:
+                title = str(posting.get("name", "") or "").strip()
+                posting_id = str(posting.get("id", "") or "").strip()
+                if not posting_id or posting_id in seen_ids:
+                    continue
+                seen_ids.add(posting_id)
+                if not any(keyword_present(term, title.lower()) for term in title_terms):
+                    continue
+                detail_response = session.get(
+                    f"{api_base}/{posting_id}", timeout=12,
+                )
+                if detail_response.status_code != 200:
+                    continue
+                detail = detail_response.json()
+                if detail.get("active") is False:
+                    continue
+                sections = (detail.get("jobAd") or {}).get("sections") or {}
+                description = " ".join(
+                    clean_text(section.get("text", ""))
+                    for section in sections.values()
+                    if isinstance(section, dict)
+                ) if isinstance(sections, dict) else ""
+                location_data = detail.get("location") or posting.get("location") or {}
+                country = str(location_data.get("country", "") or "")
+                if country.lower() in {"gb", "uk", "gbr"}:
+                    country = "United Kingdom"
+                location = ", ".join(
+                    str(part) for part in (
+                        location_data.get("city", ""),
+                        location_data.get("region", ""),
+                        country,
+                    ) if part
+                )
+                employment = detail.get("typeOfEmployment") or {}
+                if isinstance(employment, dict):
+                    employment = employment.get("label") or employment.get("id") or ""
+                url = str(detail.get("postingUrl", "") or "").strip()
+                if not url:
+                    url = f"https://jobs.smartrecruiters.com/{board}/{posting_id}"
+                result = build_result(
+                    company=(company_name, [host(url)], []),
+                    title=title,
+                    description=description,
+                    location=location,
+                    url=url,
+                    method="SmartRecruiters Public Posting API",
+                    date_posted=str(detail.get("releasedDate", "") or ""),
+                    employment_type=str(employment),
+                )
+                if result:
+                    results.append(result)
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            continue
+    return deduplicate(results)
+
+
 def scan_workable(
     company_name: str,
     board: str,
@@ -4748,6 +4831,13 @@ def scan_ats_board(
     if platform == "lever":
 
         return scan_lever(
+            company,
+            board_id,
+        )
+
+    if platform == "smartrecruiters":
+
+        return scan_smartrecruiters(
             company,
             board_id,
         )
@@ -6048,9 +6138,10 @@ def run_self_test() -> None:
         ("jobtoday.com", ["jobtoday.com"], []),
     )
     sophos_ok = ("Sophos", "lever", "sophos") in ATS_BOARDS
-    print(f"{'PASS' if banner_ok and board_ok and sophos_ok else 'FAIL'} | "
+    netcompany_ok = ("Netcompany", "smartrecruiters", "Netcompany1") in ATS_BOARDS
+    print(f"{'PASS' if banner_ok and board_ok and sophos_ok and netcompany_ok else 'FAIL'} | "
           "closed-page banners, aggregator rejection and Sophos Lever coverage")
-    if not (banner_ok and board_ok and sophos_ok):
+    if not (banner_ok and board_ok and sophos_ok and netcompany_ok):
         failures.append("closed-banner/aggregator/Lever regression")
 
     # Persistent state: first run is NEW, identical second run is SEEN, a
