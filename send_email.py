@@ -70,6 +70,29 @@ def email_worthy(job: Dict[str, str]) -> bool:
     if has_foreign and not has_uk: return False
     return True
 
+def deduplicate_email_jobs(jobs: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Notify once for same-employer/title postings released on the same day.
+
+    Keep the London option when an employer advertises the same role in
+    multiple UK cities. Both distinct ATS URLs remain in the full audit CSV.
+    """
+    kept: List[Dict[str, str]] = []
+    index: Dict[tuple, int] = {}
+    for job in jobs:
+        company = " ".join(str(job.get("company", "") or "").lower().split())
+        title = " ".join(str(job.get("title", "") or "").lower().split())
+        posted = str(job.get("date_posted", "") or "")[:10]
+        key = (company, title, posted)
+        if key in index:
+            previous = kept[index[key]]
+            if "london" in str(job.get("location", "")).lower() and "london" not in str(previous.get("location", "")).lower():
+                kept[index[key]] = job
+            continue
+        index[key] = len(kept)
+        kept.append(job)
+    return kept
+
+
 def require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value: raise RuntimeError(f"Required environment variable {name} is missing or empty.")
@@ -108,9 +131,9 @@ def send_report(api_key: str, payload: Dict[str,object]) -> str:
 
 def main() -> None:
     raw_jobs=read_jobs(RESULT_CSV)
-    jobs=[job for job in raw_jobs if job.get("notification_status", "").strip().upper() == "NEW" and email_worthy(job)]
+    jobs=deduplicate_email_jobs([job for job in raw_jobs if job.get("notification_status", "").strip().upper() == "NEW" and email_worthy(job)])
     suppressed=len(raw_jobs)-len(jobs)
-    if suppressed: print(f"Suppressed {suppressed} non-IAM/non-official notification candidate(s).")
+    if suppressed: print(f"Suppressed {suppressed} non-eligible or duplicate notification candidate(s).")
     if not jobs:
         print("No email-worthy NEW IAM jobs this run. Email not sent."); return
     payload=build_payload(jobs,require_env("BREVO_SENDER_EMAIL"),require_env("REPORT_EMAIL"))
