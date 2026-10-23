@@ -52,8 +52,13 @@ def recommend_cv(job: Dict[str, str]) -> str:
 
 def email_worthy(job: Dict[str, str]) -> bool:
     title = str(job.get("title", "") or "").strip().lower()
+    company = str(job.get("company", "") or "").strip()
+    if not company or company.lower() in {"unknown", "discovered employer"}: return False
     if any(term in title for term in NON_IAM_TITLE_TERMS): return False
+    employment = str(job.get("employment_type", "") or "").strip().lower()
+    if any(term in employment for term in ("contract", "fixed-term", "temporary", "interim", "freelance")): return False
     url = str(job.get("url") or job.get("canonical_url") or "").strip()
+    if not url: return False
     host = (urlparse(url).hostname or "").lower()
     if any(host == d or host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS): return False
     location = " " + str(job.get("location", "") or "").strip().lower() + " "
@@ -88,11 +93,11 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
         vals=[company,role,safe(job.get("notification_status","NEW")),safe(job.get("match_type","")),safe(job.get("match_score","")),safe(job.get("confidence","")),safe(job.get("location","")),safe(job.get("location_status","")),safe(job.get("working_arrangement","")),safe(job.get("employment_type","")),safe(job.get("salary","")),safe(job.get("date_posted","")),safe(recommend_cv(job)),safe(job.get("matched_keywords",""))]
         rendered_rows.append("<tr>"+"".join(f"<td>{v}</td>" for v in vals)+"</tr>")
     rows="\n".join(rendered_rows)
-    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW/UPDATED job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Posted','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
+    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Posted','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
 
 def build_payload(jobs: List[Dict[str,str]], sender_email: str, recipient_email: str) -> Dict[str,object]:
     today=datetime.now(timezone.utc).strftime("%d %b %Y")
-    return {"sender":{"name":"UK IAM Job Hunter","email":sender_email},"to":[{"email":recipient_email}],"subject":f"UK IAM Hunter V5.4 - {len(jobs)} NEW/UPDATED role(s) - {today}","htmlContent":build_html(jobs),"tags":["uk-iam-job-hunter-v5-4"]}
+    return {"sender":{"name":"UK IAM Job Hunter","email":sender_email},"to":[{"email":recipient_email}],"subject":f"UK IAM Hunter V5.4 - {len(jobs)} NEW role(s) - {today}","htmlContent":build_html(jobs),"tags":["uk-iam-job-hunter-v5-4"]}
 
 def send_report(api_key: str, payload: Dict[str,object]) -> str:
     response=requests.post(BREVO_ENDPOINT,headers={"accept":"application/json","api-key":api_key,"content-type":"application/json"},json=payload,timeout=REQUEST_TIMEOUT)
@@ -107,9 +112,9 @@ def main() -> None:
     suppressed=len(raw_jobs)-len(jobs)
     if suppressed: print(f"Suppressed {suppressed} non-IAM/non-official notification candidate(s).")
     if not jobs:
-        print("No email-worthy NEW or UPDATED IAM jobs this run. Email not sent."); return
+        print("No email-worthy NEW IAM jobs this run. Email not sent."); return
     payload=build_payload(jobs,require_env("BREVO_SENDER_EMAIL"),require_env("REPORT_EMAIL"))
-    print(f"Preparing IAM email with {len(jobs)} NEW/UPDATED result(s)...")
+    print(f"Preparing IAM email with {len(jobs)} NEW result(s)...")
     message_id=send_report(require_env("BREVO_API_KEY"),payload)
     print(f"Email sent successfully. Brevo message ID: {message_id}" if message_id else "Email sent successfully.")
 
