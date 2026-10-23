@@ -150,7 +150,7 @@ jobs:
           IAM_PLAYWRIGHT_BUDGET: "10"
           IAM_STATE_DIR: ".iam_state"
           IAM_STATE_RETENTION_DAYS: "180"
-          IAM_NOTIFY_UPDATED_JOBS: "true"
+          IAM_NOTIFY_UPDATED_JOBS: "false"
           ARCHIVE_TO_GOOGLE: "false"
 
         shell: bash
@@ -170,7 +170,7 @@ jobs:
           BRAVE_SEARCH_FRESHNESS: "pw"
           IAM_STATE_DIR: ".iam_state"
           IAM_STATE_RETENTION_DAYS: "180"
-          IAM_NOTIFY_UPDATED_JOBS: "true"
+          IAM_NOTIFY_UPDATED_JOBS: "false"
           USE_PLAYWRIGHT: "false"
           ARCHIVE_TO_GOOGLE: "false"
         shell: bash
