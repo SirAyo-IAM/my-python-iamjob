@@ -129,12 +129,13 @@ jobs:
           set -euo pipefail
           python uk_iam_hunter.py --self-test
           python - <<'PY'
+          from datetime import datetime, timedelta, timezone
           from send_email import deduplicate_email_jobs, email_worthy
           base = {
               "company": "Netcompany",
               "title": "IAM Service Operations Engineer",
               "location": "Leeds, United Kingdom",
-              "date_posted": "2026-10-12T15:00:00Z",
+              "date_posted": datetime.now(timezone.utc).isoformat(),
               "url": "https://jobs.smartrecruiters.com/Netcompany1/123",
               "employment_type": "Full-time",
           }
@@ -145,7 +146,9 @@ jobs:
           assert not email_worthy({**base, "company": ""})
           assert not email_worthy({**base, "employment_type": "Contract"})
           assert email_worthy(london)
-          print("PASS | NEW-only email eligibility and multi-city deduplication")
+          stale = {**base, "date_posted": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()}
+          assert not email_worthy(stale)
+          print("PASS | NEW-only eligibility, seven-day freshness and multi-city deduplication")
           PY
 
       - name: Run UK IAM Hunter V5.4
