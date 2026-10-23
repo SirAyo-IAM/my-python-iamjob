@@ -2,7 +2,7 @@
 """Email UK IAM Job Hunter V5.4 results through Brevo."""
 from __future__ import annotations
 import csv, html, os, sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List
 from urllib.parse import urlparse
@@ -59,6 +59,18 @@ def email_worthy(job: Dict[str, str]) -> bool:
     if any(term in employment for term in ("contract", "fixed-term", "temporary", "interim", "freelance")): return False
     url = str(job.get("url") or job.get("canonical_url") or "").strip()
     if not url: return False
+    # First discovery is not proof of a freshly advertised vacancy. Suppress
+    # known older postings while keeping them in the full audit/history.
+    posted = str(job.get("date_posted", "") or "").strip()
+    if posted:
+        try:
+            posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
+            if posted_at.tzinfo is None:
+                posted_at = posted_at.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - posted_at
+            if age > timedelta(days=7) or age < -timedelta(days=1): return False
+        except ValueError:
+            pass
     host = (urlparse(url).hostname or "").lower()
     if any(host == d or host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS): return False
     location = " " + str(job.get("location", "") or "").strip().lower() + " "
