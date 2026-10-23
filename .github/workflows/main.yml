@@ -16,6 +16,10 @@ on:
     - cron: "0 12 * * *"
       timezone: "Europe/London"
 
+concurrency:
+  group: uk-iam-hunter-main
+  cancel-in-progress: true
+
 jobs:
   run-python:
     runs-on: ubuntu-latest
@@ -229,6 +233,7 @@ jobs:
           PY
 
       - name: Save seen-job state
+        if: github.event_name != 'push'
         uses: actions/cache/save@v4
         with:
           path: .iam_state
@@ -250,6 +255,7 @@ jobs:
           retention-days: 14
 
       - name: Send NEW jobs email
+        if: github.event_name != 'push'
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
