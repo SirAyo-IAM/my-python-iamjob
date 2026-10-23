@@ -47,6 +47,8 @@ DIRECT_JOB_SEEDS = [
     "https://accenture.wd103.myworkdayjobs.com/en-US/AccentureCareers/job/PAM-Consultant---London_R00310618",
     "https://careers.hippodigital.co.uk/vacancies/1489/principal-business-analyst-identity.html",
     # Verified live official/ATS roles missed by recent current-results sets.
+    "https://job-boards.eu.greenhouse.io/mangroup/jobs/4997703101",  # SailPoint Engineer
+    "https://job-boards.eu.greenhouse.io/mangroup/jobs/4997701101",  # Technical IAM Analyst
     "https://ybscareers.co.uk/job/identity-engineer-in-bradford.1338",
     "https://jobs.jobvite.com/maplesandcalder/job/onoBAfwG",
     "https://cgi.njoyn.com/corp/xweb/xweb.asp?BRID=1174217&Jobid=J1124-2743&NTKN=c&Page=JobDetails&clid=21001&lang=2",
@@ -100,6 +102,7 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:jobs.ashbyhq.com/primer.io (IAM OR "Identity" OR "Access Governance")',
     'site:jobs.smartrecruiters.com/Netcompany1 (IAM OR "Identity and Access" OR SailPoint)',
     'site:jobs.lever.co/sophos ("Identity Engineer" OR Saviynt OR Entra)',
+    'site:job-boards.eu.greenhouse.io/mangroup/jobs (SailPoint OR "Technical IAM" OR "Identity") London',
     'site:nccgroup.pinpointhq.com/postings (IAM OR "Identity Governance" OR CyberArk)',
     'site:cgi.njoyn.com (IAM OR SailPoint OR CyberArk OR "Identity and Access")',
     'site:oraclecloud.com/hcmUI/CandidateExperience (IAM OR "Identity and Access Management" OR SailPoint OR CyberArk) "United Kingdom"',
@@ -272,12 +275,14 @@ def discover() -> List[Dict[str, Any]]:
                 if lloyds_results:
                     results.extend(lloyds_results)
                     continue
-            results.extend(
-                hunter.extract_results_from_candidate(
-                    url,
-                    method="V5.4 priority official discovery",
-                )
+            extracted = hunter.extract_results_from_candidate(
+                url,
+                method="V5.4 priority official discovery",
             )
+            if hunter.host(url) == "job-boards.eu.greenhouse.io" and "/mangroup/jobs/" in url.lower():
+                for job in extracted:
+                    job["company"] = "Man Group"
+            results.extend(extracted)
         except Exception:
             continue
 
