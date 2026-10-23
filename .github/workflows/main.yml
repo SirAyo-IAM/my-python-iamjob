@@ -128,6 +128,25 @@ jobs:
         run: |
           set -euo pipefail
           python uk_iam_hunter.py --self-test
+          python - <<'PY'
+          from send_email import deduplicate_email_jobs, email_worthy
+          base = {
+              "company": "Netcompany",
+              "title": "IAM Service Operations Engineer",
+              "location": "Leeds, United Kingdom",
+              "date_posted": "2026-10-12T15:00:00Z",
+              "url": "https://jobs.smartrecruiters.com/Netcompany1/123",
+              "employment_type": "Full-time",
+          }
+          london = {**base, "location": "London, United Kingdom",
+                    "url": "https://jobs.smartrecruiters.com/Netcompany1/456"}
+          assert len(deduplicate_email_jobs([base, london])) == 1
+          assert deduplicate_email_jobs([base, london])[0]["location"].startswith("London")
+          assert not email_worthy({**base, "company": ""})
+          assert not email_worthy({**base, "employment_type": "Contract"})
+          assert email_worthy(london)
+          print("PASS | NEW-only email eligibility and multi-city deduplication")
+          PY
 
       - name: Run UK IAM Hunter V5.4
         env:
