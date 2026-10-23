@@ -1198,6 +1198,7 @@ ATS_BOARDS = [
     ("Darktrace", "greenhouse", "darktrace"),
     ("Sophos", "lever", "sophos"),
     ("Netcompany", "smartrecruiters", "Netcompany1"),
+    ("Man Group", "greenhouse", "mangroup"),
     ("Revolut", "lever", "revolut"),
     ("Canonical", "lever", "canonical"),
     ("Starling Bank", "workable", "starling-bank"),
@@ -3036,7 +3037,7 @@ def greenhouse_identity_from_url(url: str) -> Tuple[str, str]:
     h = parsed.netloc.lower()
     path_parts = [part for part in parsed.path.split("/") if part]
 
-    if h in {"job-boards.greenhouse.io", "boards.greenhouse.io"} and path_parts:
+    if h in {"job-boards.greenhouse.io", "boards.greenhouse.io", "job-boards.eu.greenhouse.io", "boards.eu.greenhouse.io"} and path_parts:
         board = path_parts[0]
         job_id = ""
         if "jobs" in path_parts:
@@ -3083,7 +3084,7 @@ def scan_greenhouse_job_by_id(
         url = f"https://job-boards.greenhouse.io/{board}/jobs/{job_id}"
 
     company = (
-        company_name or str((job.get("company") or {}).get("name", "")) or board,
+        company_name or str(job.get("company_name") or "") or str((job.get("company") or {}).get("name", "")) or board,
         [host(url), "job-boards.greenhouse.io"],
         [],
     )
@@ -3094,6 +3095,7 @@ def scan_greenhouse_job_by_id(
         location=location,
         url=url,
         method="Greenhouse Job API -> V5.3 dynamic discovery",
+        date_posted=str(job.get("first_published") or ""),
     )
     return [result] if result else []
 
@@ -4530,6 +4532,7 @@ def scan_greenhouse(
                 location=location,
                 url=url,
                 method="Greenhouse Public API",
+                date_posted=str(job.get("first_published") or ""),
             )
 
             if result:
@@ -6139,9 +6142,11 @@ def run_self_test() -> None:
     )
     sophos_ok = ("Sophos", "lever", "sophos") in ATS_BOARDS
     netcompany_ok = ("Netcompany", "smartrecruiters", "Netcompany1") in ATS_BOARDS
-    print(f"{'PASS' if banner_ok and board_ok and sophos_ok and netcompany_ok else 'FAIL'} | "
+    man_group_ok = (("Man Group", "greenhouse", "mangroup") in ATS_BOARDS and
+                    greenhouse_identity_from_url("https://job-boards.eu.greenhouse.io/mangroup/jobs/4997701101") == ("mangroup", "4997701101"))
+    print(f"{'PASS' if banner_ok and board_ok and sophos_ok and netcompany_ok and man_group_ok else 'FAIL'} | "
           "closed-page banners, aggregator rejection and Sophos Lever coverage")
-    if not (banner_ok and board_ok and sophos_ok and netcompany_ok):
+    if not (banner_ok and board_ok and sophos_ok and netcompany_ok and man_group_ok):
         failures.append("closed-banner/aggregator/Lever regression")
 
     # Persistent state: first run is NEW, identical second run is SEEN, a
