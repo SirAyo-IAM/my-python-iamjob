@@ -546,6 +546,8 @@ BLOCKED_JOB_BOARD_DOMAINS = {
     "cv-library.co.uk", "glassdoor.com", "jobsite.co.uk", "monster.co.uk",
     "adzuna.co.uk", "jooble.org", "simplyhired.co.uk", "ziprecruiter.com",
     "talent.com", "jobsora.com", "jobrapido.com", "careerjet.co.uk",
+    "jobtoday.com", "dreamworkhq.com", "jobsinuk.app",
+    "vercida.com", "dataanalystjobs.co.uk",
 }
 
 # Durable high-value sources. These are not individual vacancies; they are
@@ -1128,8 +1130,14 @@ COMPANIES: List[Tuple[str, List[str], List[str]]] = [
 
     (
         "Sophos",
-        ["sophos.com"],
-        ["https://www.sophos.com/en-us/careers"],
+        ["sophos.com", "lever.co"],
+        ["https://jobs.lever.co/sophos"],
+    ),
+
+    (
+        "Netcompany",
+        ["netcompany.com", "smartrecruiters.com"],
+        ["https://jobs.smartrecruiters.com/Netcompany1"],
     ),
 
     (
@@ -1188,7 +1196,7 @@ ATS_BOARDS = [
     ("Deliveroo", "greenhouse", "deliveroo"),
     ("Checkout.com", "greenhouse", "checkoutcom"),
     ("Darktrace", "greenhouse", "darktrace"),
-    ("Sophos", "greenhouse", "sophos"),
+    ("Sophos", "lever", "sophos"),
     ("Revolut", "lever", "revolut"),
     ("Canonical", "lever", "canonical"),
     ("Starling Bank", "workable", "starling-bank"),
@@ -1283,6 +1291,10 @@ def same_domain(url: str, domains: Iterable[str]) -> bool:
 
 
 def allowed_result_url(url: str, company: Tuple[str, List[str], List[str]]) -> bool:
+    # Even a discovered site claiming to be the employer must not make an
+    # aggregator/listing page eligible as a final vacancy.
+    if is_blocked_job_board(url):
+        return False
     if same_domain(url, company[1]):
         return True
 
@@ -1662,6 +1674,8 @@ CLOSED_JOB_PATTERNS = [
     r"\bapplications have closed\b",
     r"\bthis vacancy has closed\b",
     r"\bjob posting has expired\b",
+    r"\bthis vacancy has (?:now )?expired\b",
+    r"\bjob you are trying to apply for has been filled\b",
 ]
 
 
@@ -3308,6 +3322,11 @@ def extract_results_from_candidate(
     html_content, final_url = fetched
     soup = BeautifulSoup(html_content, "html.parser")
 
+    # A closed-page banner can coexist with stale JobPosting JSON-LD.
+    # Check visible page text before trusting structured job metadata.
+    if is_closed_job_page("", soup.get_text(" ", strip=True)[:1200]):
+        return []
+
     if is_barclays_job_url(final_url):
         barclays_result = extract_barclays_job_result(soup, final_url, method)
         if barclays_result:
@@ -4310,6 +4329,11 @@ def crawl_company(
                 "html.parser",
             )
 
+            # Reject expired/filled page banners even if embedded JobPosting
+            # metadata still describes the old vacancy as open.
+            if is_closed_job_page("", soup.get_text(" ", strip=True)[:1200]):
+                continue
+
             # JSON-LD first.
             structured_jobs = (
                 extract_jsonld_jobs(
@@ -4596,6 +4620,7 @@ def scan_lever(
                 location=location,
                 url=url,
                 method="Lever Public API",
+                employment_type=str(categories.get("commitment", "") or ""),
             )
 
             if result:
@@ -6010,6 +6035,23 @@ def run_self_test() -> None:
         failures.append(
             "closed vacancy rejection"
         )
+
+    # Real-world expired-page banners and aggregator URLs must not survive
+    # source validation, even when stale structured metadata exists.
+    closed_banner_cases = [
+        "This vacancy has now expired. Please see similar roles below.",
+        "We are sorry, the job you are trying to apply for has been filled.",
+    ]
+    banner_ok = all(is_closed_job_page("", phrase) for phrase in closed_banner_cases)
+    board_ok = not allowed_result_url(
+        "https://jobtoday.com/gb/jobs-no-experience-remote/london",
+        ("jobtoday.com", ["jobtoday.com"], []),
+    )
+    sophos_ok = ("Sophos", "lever", "sophos") in ATS_BOARDS
+    print(f"{'PASS' if banner_ok and board_ok and sophos_ok else 'FAIL'} | "
+          "closed-page banners, aggregator rejection and Sophos Lever coverage")
+    if not (banner_ok and board_ok and sophos_ok):
+        failures.append("closed-banner/aggregator/Lever regression")
 
     # Persistent state: first run is NEW, identical second run is SEEN, a
     # meaningful location change becomes UPDATED.
