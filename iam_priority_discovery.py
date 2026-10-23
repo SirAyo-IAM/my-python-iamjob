@@ -56,7 +56,6 @@ DIRECT_JOB_SEEDS = [
     "https://statestreet.wd1.myworkdayjobs.com/en-US/Global/job/Infrastructure-Access-Product-Owner--Vice-President_R-795863",
     "https://jobs.lever.co/cyderes/b240768a-a7d6-4431-8e35-e50a99ed8aac",
     "https://careers.capgemini.com/job/Inverness-Cloud-IAM-Support-Engineer/1389253333/",
-    "https://careers.legalandgeneral.com/job/identity-and-access-management-team-lead-in-brighton-and-hove-jid-9055",
     "https://bupa.wd3.myworkdayjobs.com/ext_career/job/Identity-and-Access-Management-Product-Lead_R1224210",
     "https://fca.wd3.myworkdayjobs.com/en-US/FCA_Careers/job/London/Senior-Cyber-Security-Engineer_JR0022061-1",
     "https://morningstar.wd5.myworkdayjobs.com/en-US/morningstar/job/London/Lead-IAM-Engineer_REQ-057147",
@@ -80,6 +79,9 @@ KNOWN_CLOSED_URL_FRAGMENTS = [
     "careers.givaudan.com/global/en/job/119132/",
     "careers.givaudan.com/global/en/job/givgivgb119132externalenglobal/",
     "careers.givaudan.com/br/pt/job/119132/",
+    # Confirmed closed on the official employer pages (23 October 2026).
+    "careers.legalandgeneral.com/job/identity-and-access-management-team-lead-in-brighton-and-hove-jid-9055",
+    "jobs.pwc.co.uk/uk/en/job/pudpunuk700864wdexternalenuk/manager-identity-and-access-management",
 ]
 
 
@@ -94,6 +96,11 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:83zero.com/jobs (IAM OR "Identity and Access" OR SailPoint OR Saviynt OR CyberArk)',
     'site:careers.astonmartin.com (IAM OR "Identity and Access Management")',
     'site:jobs.ashbyhq.com/allica-bank (IAM OR "Identity and Access" OR "Identity Security")',
+    'site:jobs.ashbyhq.com/clearbank (IAM OR "Identity and Access" OR "Identity Security")',
+    'site:jobs.ashbyhq.com/primer.io (IAM OR "Identity" OR "Access Governance")',
+    'site:jobs.smartrecruiters.com/Netcompany1 (IAM OR "Identity and Access" OR SailPoint)',
+    'site:jobs.lever.co/sophos ("Identity Engineer" OR Saviynt OR Entra)',
+    'site:nccgroup.pinpointhq.com/postings (IAM OR "Identity Governance" OR CyberArk)',
     'site:cgi.njoyn.com (IAM OR SailPoint OR CyberArk OR "Identity and Access")',
     'site:oraclecloud.com/hcmUI/CandidateExperience (IAM OR "Identity and Access Management" OR SailPoint OR CyberArk) "United Kingdom"',
     'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security" OR "Privileged Access")',
