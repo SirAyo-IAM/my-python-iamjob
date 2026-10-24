@@ -548,6 +548,7 @@ BLOCKED_JOB_BOARD_DOMAINS = {
     "talent.com", "jobsora.com", "jobrapido.com", "careerjet.co.uk",
     "jobtoday.com", "dreamworkhq.com", "jobsinuk.app",
     "vercida.com", "dataanalystjobs.co.uk",
+    "remoteanywherejob.com",  # Aggregates worldwide vacancies; not an employer/ATS.
 }
 
 # Durable high-value sources. These are not individual vacancies; they are
