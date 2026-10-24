@@ -148,7 +148,18 @@ jobs:
           assert email_worthy(london)
           stale = {**base, "date_posted": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()}
           assert not email_worthy(stale)
-          print("PASS | NEW-only eligibility, seven-day freshness and multi-city deduplication")
+          # A worldwide remote-jobs aggregator produced a false-positive CyberArk alert.
+          # Reject its original URL even when the extracted title/location look UK IAM.
+          aggregator = {**base, "company": "United States Digital Experience Platforms",
+                        "title": "CyberArk Architect", "location": "London",
+                        "url": "https://www.remoteanywherejob.com/en/job/example",
+                        "date_posted": "", "employment_type": ""}
+          assert not email_worthy(aggregator)
+          from uk_iam_hunter import is_blocked_job_board, looks_like_official_job_candidate
+          assert is_blocked_job_board(aggregator["url"])
+          assert not looks_like_official_job_candidate(aggregator["url"])
+          assert not is_blocked_job_board(base["url"])
+          print("PASS | NEW-only eligibility, seven-day freshness, multi-city deduplication and aggregator rejection")
           PY
 
       - name: Run UK IAM Hunter V5.4
