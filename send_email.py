@@ -25,6 +25,7 @@ BLOCKED_EMAIL_DOMAINS = {
     "dreamworkhq.com", "jobsinuk.app", "vercida.com", "jobtoday.com",
     "linkedin.com", "indeed.com", "reed.co.uk", "totaljobs.com",
     "cv-library.co.uk", "glassdoor.com",
+    "remoteanywherejob.com",  # Independent last-line guard for scraped listings.
 }
 NON_IAM_TITLE_TERMS = (
     "product marketing", "marketing manager", "sales engineer",
