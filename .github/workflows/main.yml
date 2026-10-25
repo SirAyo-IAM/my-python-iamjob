@@ -179,7 +179,7 @@ jobs:
           MAX_GLOBAL_CANDIDATES: "180"
           MAX_LISTING_LINKS: "80"
           IAM_RECENT_SEARCH_HINT: "posted this week"
-          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          BRAVE_SEARCH_API_KEY: "" # Pause paid Brave requests; retain free search/official discovery
           BRAVE_SEARCH_FRESHNESS: "pw"
           USE_COMPANY_SEARCH_DISCOVERY: "false"
           SEARCH_ENGINE_MODE: "light"
@@ -203,7 +203,7 @@ jobs:
           IAM_MAX_SEARCH_RESULTS: "12"
           IAM_RECENT_SEARCH_HINT: "posted this week"
           SEARCH_ENGINE_MODE: "light"
-          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          BRAVE_SEARCH_API_KEY: "" # Pause paid Brave requests; retain free search/official discovery
           BRAVE_SEARCH_FRESHNESS: "pw"
           IAM_STATE_DIR: ".iam_state"
           IAM_STATE_RETENTION_DAYS: "180"
