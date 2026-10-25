@@ -599,6 +599,14 @@ GREENHOUSE_WRAPPER_BOARDS = {
 }
 
 GLOBAL_DISCOVERY_QUERIES = [
+    # Official ATS-focused queries catch external application links surfaced
+    # by LinkedIn even when the employer is absent from our company seeds.
+    'site:myworkdayjobs.com ("identity" OR "IAM" OR "access governance") (UK OR London OR England) jobs',
+    'site:oraclecloud.com/hcmUI/CandidateExperience ("identity" OR "IDAM" OR "SailPoint") (UK OR London) jobs',
+    'site:jobs.smartrecruiters.com ("IAM" OR "identity engineer" OR "privileged access") (UK OR London) jobs',
+    'site:job-boards.greenhouse.io ("identity" OR "access management" OR "Okta") (UK OR London) jobs',
+    'site:jobs.lever.co ("identity" OR "CyberArk" OR "Entra ID") (UK OR London) jobs',
+    'site:jobs.ashbyhq.com ("identity" OR "IAM" OR "SSO") (UK OR London) jobs',
     '"IAM Engineer" (UK OR "United Kingdom" OR London) jobs',
     '"IAM Analyst" (UK OR "United Kingdom" OR London) jobs',
     '"Identity Engineer" (UK OR "United Kingdom" OR London) jobs',
