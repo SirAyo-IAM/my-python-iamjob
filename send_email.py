@@ -58,6 +58,8 @@ def email_worthy(job: Dict[str, str]) -> bool:
     if any(term in title for term in NON_IAM_TITLE_TERMS): return False
     employment = str(job.get("employment_type", "") or "").strip().lower()
     if any(term in employment for term in ("contract", "fixed-term", "temporary", "interim", "freelance")): return False
+    # A blank or ambiguous employment field is not proof of permanence.
+    if not any(term in employment for term in ("permanent", "full-time", "full time", "regular", "indefinite")): return False
     url = str(job.get("url") or job.get("canonical_url") or "").strip()
     if not url: return False
     # First discovery is not proof of a freshly advertised vacancy. Suppress
