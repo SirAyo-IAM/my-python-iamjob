@@ -1264,6 +1264,7 @@ def canonical_url(url: str) -> str:
     keep_params = {
         "gh_jid", "jobid", "job_id", "jid", "job", "reqid",
         "requisitionid", "requisition_id", "postingid", "posting_id",
+        "vacancy_id", "vacancyid",
     }
 
     try:
