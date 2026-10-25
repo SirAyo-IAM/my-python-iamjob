@@ -210,6 +210,7 @@ ATS_DOMAINS = {
     "applytojob.com": "ApplyToJob",
     "njoyn.com": "Njoyn",
     "pageuppeople.com": "PageUp",
+    "breezy.hr": "Breezy HR",
 }
 
 
@@ -563,6 +564,8 @@ DIRECT_DISCOVERY_SEEDS = [
     ("Barclays JML search", "https://search.jobs.barclays/search-jobs/jml/22545/1/1"),
     ("Barclays entitlement search", "https://search.jobs.barclays/search-jobs/entitlement/22545/1/1"),
     ("Odevo jobs", "https://career.odevo.com/jobs"),
+    ("Marex Breezy", "https://marex.breezy.hr/"),
+    ("Nomura UK careers", "https://careers.nomura.com/Nomura/"),
     ("Qube Greenhouse", "https://job-boards.greenhouse.io/quberesearchandtechnologies"),
 
     # V5.4 source-coverage expansion from real UK IAM misses.
@@ -607,6 +610,8 @@ GLOBAL_DISCOVERY_QUERIES = [
     'site:job-boards.greenhouse.io ("identity" OR "access management" OR "Okta") (UK OR London) jobs',
     'site:jobs.lever.co ("identity" OR "CyberArk" OR "Entra ID") (UK OR London) jobs',
     'site:jobs.ashbyhq.com ("identity" OR "IAM" OR "SSO") (UK OR London) jobs',
+    'site:breezy.hr ("IAM" OR "identity governance" OR "privileged access") (UK OR London) jobs',
+    'site:job-boards.eu.greenhouse.io ("identity" OR "IAM" OR "security engineer") (UK OR London) jobs',
     '"IAM Engineer" (UK OR "United Kingdom" OR London) jobs',
     '"IAM Analyst" (UK OR "United Kingdom" OR London) jobs',
     '"Identity Engineer" (UK OR "United Kingdom" OR London) jobs',
