@@ -114,6 +114,9 @@ def live_application_page(job: Dict[str, str]) -> bool:
         return False
     if parsed.path.lower().rstrip("/") in {"", "/jobs", "/careers", "/vacancies", "/job-search"}:
         return False
+    from uk_iam_hunter import is_closed_job_page, looks_like_listing_url
+    if looks_like_listing_url(url):
+        return False
     try:
         response = requests.get(
             url, timeout=12, allow_redirects=True,
@@ -129,10 +132,11 @@ def live_application_page(job: Dict[str, str]) -> bool:
             return False
         if final.path.lower().rstrip("/") in {"", "/jobs", "/careers", "/vacancies", "/job-search"}:
             return False
+        if looks_like_listing_url(final.geturl()):
+            return False
         body = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
         if len(body) < 180:
             return False
-        from uk_iam_hunter import is_closed_job_page
         if is_closed_job_page("", body[:2500]):
             return False
         tokens = [
