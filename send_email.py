@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv, html, os, re, sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Dict, List
 from urllib.parse import urlparse
 import requests
@@ -11,6 +12,7 @@ from bs4 import BeautifulSoup
 
 RESULT_CSV = Path(os.getenv("IAM_EMAIL_RESULTS_FILE", "uk_iam_new_results.csv"))
 BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
+UK_TZ = ZoneInfo("Europe/London")
 REQUEST_TIMEOUT = 30
 MAX_EMAIL_ROWS = 100
 CV_GENERAL = "Identity & Access Administrator"
@@ -181,7 +183,7 @@ def read_jobs(path: Path = RESULT_CSV) -> List[Dict[str, str]]:
 def safe(value: object) -> str: return html.escape(str(value or ""), quote=True)
 
 def build_html(jobs: List[Dict[str, str]]) -> str:
-    generated = datetime.now(timezone.utc).strftime("%d %B %Y %H:%M UTC")
+    generated = datetime.now(UK_TZ).strftime("%d %B %Y %H:%M %Z")
     core_count = sum(1 for j in jobs if j.get("match_type", "").strip().upper() == "CORE IAM")
     adjacent_count = sum(1 for j in jobs if j.get("match_type", "").strip().upper() == "ADJACENT IDENTITY/SECURITY")
     rendered_rows=[]
@@ -194,7 +196,7 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Posted','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
 
 def build_payload(jobs: List[Dict[str,str]], sender_email: str, recipient_email: str) -> Dict[str,object]:
-    today=datetime.now(timezone.utc).strftime("%d %b %Y")
+    today=datetime.now(UK_TZ).strftime("%d %b %Y")
     return {"sender":{"name":"UK IAM Job Hunter","email":sender_email},"to":[{"email":recipient_email}],"subject":f"UK IAM Hunter V5.4 - {len(jobs)} NEW role(s) - {today}","htmlContent":build_html(jobs),"tags":["uk-iam-job-hunter-v5-4"]}
 
 def send_report(api_key: str, payload: Dict[str,object]) -> str:
