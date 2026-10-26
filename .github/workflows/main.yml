@@ -188,7 +188,7 @@ jobs:
           IAM_COMPANY_SCAN_SECONDS: "75"
           USE_GLOBAL_DISCOVERY: "true"
           USE_SEARCH_DISCOVERY: "true"
-          GLOBAL_SEARCH_QUERY_LIMIT: "20"
+          GLOBAL_SEARCH_QUERY_LIMIT: "26"
           MAX_GLOBAL_CANDIDATES: "180"
           MAX_LISTING_LINKS: "80"
           IAM_RECENT_SEARCH_HINT: "posted this week"
