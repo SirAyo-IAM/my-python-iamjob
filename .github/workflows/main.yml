@@ -138,6 +138,12 @@ jobs:
               "date_posted": datetime.now(timezone.utc).isoformat(),
               "url": "https://jobs.smartrecruiters.com/Netcompany1/123",
               "employment_type": "Full-time",
+              "description_verified": "YES",
+              "description_length": "420",
+              "location_status": "UK CONFIRMED",
+              "match_type": "CORE IAM",
+              "match_score": "105",
+              "source_method": "SmartRecruiters Public API",
           }
           london = {**base, "location": "London, United Kingdom",
                     "url": "https://jobs.smartrecruiters.com/Netcompany1/456"}
@@ -146,6 +152,11 @@ jobs:
           assert not email_worthy({**base, "company": ""})
           assert not email_worthy({**base, "employment_type": "Contract"})
           assert email_worthy(london)
+          assert not email_worthy({**base, "description_verified": "NO"})
+          assert not email_worthy({**base, "description_verified": ""})
+          assert not email_worthy({**base, "location_status": "UK UNKNOWN"})
+          assert not email_worthy({**base, "match_score": "20"})
+          assert not email_worthy({**base, "source_method": ""})
           stale = {**base, "date_posted": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()}
           assert not email_worthy(stale)
           assert not email_worthy({**base, "date_posted": ""})
