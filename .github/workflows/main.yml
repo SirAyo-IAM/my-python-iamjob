@@ -148,6 +148,8 @@ jobs:
           assert email_worthy(london)
           stale = {**base, "date_posted": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()}
           assert not email_worthy(stale)
+          assert not email_worthy({**base, "date_posted": ""})
+          assert not email_worthy({**base, "date_posted": "unverified"})
           # A worldwide remote-jobs aggregator produced a false-positive CyberArk alert.
           # Reject its original URL even when the extracted title/location look UK IAM.
           aggregator = {**base, "company": "United States Digital Experience Platforms",
