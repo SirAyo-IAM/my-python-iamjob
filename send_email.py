@@ -65,15 +65,17 @@ def email_worthy(job: Dict[str, str]) -> bool:
     # First discovery is not proof of a freshly advertised vacancy. Suppress
     # known older postings while keeping them in the full audit/history.
     posted = str(job.get("date_posted", "") or "").strip()
-    if posted:
-        try:
-            posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
-            if posted_at.tzinfo is None:
-                posted_at = posted_at.replace(tzinfo=timezone.utc)
-            age = datetime.now(timezone.utc) - posted_at
-            if age > timedelta(days=7) or age < -timedelta(days=1): return False
-        except ValueError:
-            pass
+    # A new discovery is not a new advert. Do not email jobs whose original
+    # posting age cannot be verified (including blank or malformed dates).
+    if not posted: return False
+    try:
+        posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - posted_at
+        if age > timedelta(days=7) or age < -timedelta(days=1): return False
+    except (ValueError, OverflowError):
+        return False
     host = (urlparse(url).hostname or "").lower()
     if any(host == d or host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS): return False
     location = " " + str(job.get("location", "") or "").strip().lower() + " "
