@@ -137,7 +137,7 @@ jobs:
               "location": "Leeds, United Kingdom",
               "date_posted": datetime.now(timezone.utc).isoformat(),
               "url": "https://jobs.smartrecruiters.com/Netcompany1/123",
-              "employment_type": "Full-time",
+              "employment_type": "Permanent",
               "description_verified": "YES",
               "description_length": "420",
               "location_status": "UK CONFIRMED",
@@ -152,6 +152,7 @@ jobs:
           assert not email_worthy({**base, "company": ""})
           assert not email_worthy({**base, "employment_type": "Contract"})
           assert email_worthy(london)
+          assert not email_worthy({**base, "employment_type": "Full-time"})
           assert not email_worthy({**base, "description_verified": "NO"})
           assert not email_worthy({**base, "description_verified": ""})
           assert not email_worthy({**base, "location_status": "UK UNKNOWN"})
