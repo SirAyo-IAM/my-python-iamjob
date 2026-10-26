@@ -566,6 +566,9 @@ DIRECT_DISCOVERY_SEEDS = [
     ("Odevo jobs", "https://career.odevo.com/jobs"),
     ("Marex Breezy", "https://marex.breezy.hr/"),
     ("Nomura UK careers", "https://careers.nomura.com/Nomura/"),
+    # Recruiter site confirmed to link directly to IAM vacancy_id requisitions.
+    ("Anson McCade change vacancies", "https://www.ansonmccade.com/sector_change_and_transformation.php"),
+    ("Anson McCade cyber vacancies", "https://www.ansonmccade.com/sector_information_technology.php"),
     ("Qube Greenhouse", "https://job-boards.greenhouse.io/quberesearchandtechnologies"),
 
     # V5.4 source-coverage expansion from real UK IAM misses.
@@ -3698,6 +3701,29 @@ def page_title(
 # JOB RECORD
 # ============================================================================
 
+def has_substantive_job_description(description: str) -> bool:
+    """Require vacancy-specific duties/requirements, not just an IAM title.
+
+    This is an email evidence gate, not a discovery filter: short or uncertain
+    records remain visible in the full audit but cannot trigger alerts.
+    """
+    body = re.sub(r"\\s+", " ", description or "").strip().lower()
+    if len(body) < 220:
+        return False
+    identity_terms = (
+        "identity", "access management", "access control", "sailpoint",
+        "saviynt", "cyberark", "okta", "entra", "active directory",
+        "privileged access", "provisioning", "authentication", "sso",
+    )
+    job_detail_terms = (
+        "responsibilit", "requirements", "experience", "qualifications",
+        "about the role", "what you", "you will", "you'll", "your role",
+        "duties", "skills", "we are looking", "we're looking", "essential",
+    )
+    return (any(term in body for term in identity_terms)
+            and any(term in body for term in job_detail_terms))
+
+
 def build_result(
     company: Tuple[str, List[str], List[str]],
     title: str,
@@ -3770,6 +3796,9 @@ def build_result(
         "location_status": "UK CONFIRMED",
         "working_arrangement": arrangement,
         "employment_type": employment_type,
+        "description_verified": "YES" if has_substantive_job_description(description) else "NO",
+        "description_length": len(description),
+        "description_excerpt": description[:350],
         "salary": salary,
         "date_posted": date_posted,
         "job_reference": extract_reference(full_text),
@@ -5453,6 +5482,9 @@ RESULT_FIELDS = [
     "location_status",
     "working_arrangement",
     "employment_type",
+    "description_verified",
+    "description_length",
+    "description_excerpt",
     "salary",
     "date_posted",
     "job_reference",
@@ -5763,6 +5795,23 @@ def display_audit(
 # ============================================================================
 
 def run_self_test() -> None:
+    # Actual Anson McCade vacancy IDs must survive canonicalisation, and
+    # title-only snippets must never qualify as verified descriptions.
+    anson = "https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247"
+    assert canonical_url(anson).endswith("vacancy_id=104247")
+    assert canonical_url(anson) != canonical_url(anson.replace("104247", "104248"))
+    assert looks_like_official_job_candidate(anson)
+    assert not has_substantive_job_description("IAM Engineer vacancy in London.")
+    assert has_substantive_job_description(
+        "About the role: We are looking for an Identity and Access Management "
+        "Engineer with experience in Entra ID, SailPoint and authentication. "
+        "Responsibilities include supporting identity provisioning and access "
+        "reviews, investigating account lifecycle incidents, collaborating with "
+        "application owners, documenting access requirements and improving "
+        "identity governance controls across enterprise applications."
+    )
+    print("PASS | Anson McCade vacancy ID and substantive job description evidence")
+
     """Comprehensive offline regression tests for V5.4.
 
     Covers classifier precision/recall, location handling, listing-page
