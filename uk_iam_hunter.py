@@ -3707,7 +3707,7 @@ def has_substantive_job_description(description: str) -> bool:
     This is an email evidence gate, not a discovery filter: short or uncertain
     records remain visible in the full audit but cannot trigger alerts.
     """
-    body = re.sub(r"\\s+", " ", description or "").strip().lower()
+    body = re.sub(r"\s+", " ", description or "").strip().lower()
     if len(body) < 220:
         return False
     identity_terms = (
@@ -5795,6 +5795,12 @@ def display_audit(
 # ============================================================================
 
 def run_self_test() -> None:
+    """Comprehensive offline regression tests for V5.4.
+
+    Covers classifier precision/recall, location handling, listing-page
+    rejection, match-type categorisation, Barclays/TalentBrew discovery and
+    metadata extraction, and Qube Greenhouse URL identity.
+    """
     # Actual Anson McCade vacancy IDs must survive canonicalisation, and
     # title-only snippets must never qualify as verified descriptions.
     anson = "https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247"
@@ -5812,12 +5818,6 @@ def run_self_test() -> None:
     )
     print("PASS | Anson McCade vacancy ID and substantive job description evidence")
 
-    """Comprehensive offline regression tests for V5.4.
-
-    Covers classifier precision/recall, location handling, listing-page
-    rejection, match-type categorisation, Barclays/TalentBrew discovery and
-    metadata extraction, and Qube Greenhouse URL identity.
-    """
     cases = [
         (
             "Barclays Identity & Access Lead",
