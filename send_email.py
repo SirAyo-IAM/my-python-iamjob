@@ -55,6 +55,16 @@ def email_worthy(job: Dict[str, str]) -> bool:
     title = str(job.get("title", "") or "").strip().lower()
     company = str(job.get("company", "") or "").strip()
     if not company or company.lower() in {"unknown", "discovered employer"}: return False
+    # Fail closed: a relevant title alone is not a verified vacancy.
+    # These fields are derived from the fetched official job detail or live ATS API.
+    if str(job.get("description_verified", "")).strip().upper() != "YES": return False
+    if str(job.get("location_status", "")).strip().upper() != "UK CONFIRMED": return False
+    if str(job.get("match_type", "")).strip().upper() not in {"CORE IAM", "ADJACENT IDENTITY/SECURITY"}: return False
+    try:
+        if int(float(str(job.get("match_score", "") or "0"))) < 75: return False
+    except (ValueError, TypeError, OverflowError):
+        return False
+    if not str(job.get("source_method", "")).strip(): return False
     if any(term in title for term in NON_IAM_TITLE_TERMS): return False
     employment = str(job.get("employment_type", "") or "").strip().lower()
     if any(term in employment for term in ("contract", "fixed-term", "temporary", "interim", "freelance")): return False
