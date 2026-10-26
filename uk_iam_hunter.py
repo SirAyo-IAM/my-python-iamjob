@@ -3325,6 +3325,52 @@ def extract_barclays_job_result(
         employment_type=employment_type,
     )
 
+def extract_anson_mccade_job_result(
+    soup: BeautifulSoup,
+    url: str,
+    method: str,
+) -> Optional[Dict[str, Any]]:
+    """Read Anson McCade's h2 vacancy title, not its generic h1 banner."""
+    parsed = urlparse(url)
+    if not (host(url).endswith("ansonmccade.com")
+            and parsed.path.lower().endswith("/vacancy_detail.php")
+            and parse_qs(parsed.query).get("vacancy_id")):
+        return None
+
+    headings = [
+        re.sub(r"\\s+", " ", h.get_text(" ", strip=True)).strip()
+        for h in soup.find_all(["h2", "h3"])
+    ]
+    title = next(
+        (heading for heading in headings
+         if any(keyword_present(term, heading) for term in
+                ("iam", "identity", "access", "pam", "privileged",
+                 "sailpoint", "saviynt", "cyberark", "okta", "entra", "sso"))),
+        "",
+    )
+    if not title:
+        return None
+
+    text = re.sub(r"\\s+", " ", soup.get_text(" ", strip=True)).strip()
+    header = re.search(
+        r"\\bLocation\\s*:\\s*(.{3,120}?)\\s+Type\\s*:\\s*"
+        r"(Permanent|Contract|Temporary|Fixed[- ]Term|Interim)\\b",
+        text, re.I,
+    )
+    if not header:
+        return None
+
+    return build_result(
+        company=("Anson McCade", ["ansonmccade.com"], []),
+        title=title,
+        description=text,
+        location=header.group(1).strip(),
+        url=url,
+        method=f"{method} -> Anson McCade vacancy detail",
+        employment_type=header.group(2),
+    )
+
+
 def extract_results_from_candidate(
     url: str,
     method: str = "V5.4 global discovery",
@@ -3357,6 +3403,10 @@ def extract_results_from_candidate(
         barclays_result = extract_barclays_job_result(soup, final_url, method)
         if barclays_result:
             return [barclays_result]
+
+    if host(final_url).endswith("ansonmccade.com") and "vacancy_detail.php" in final_url.lower():
+        anson_result = extract_anson_mccade_job_result(soup, final_url, method)
+        return [anson_result] if anson_result else []
 
     company = dynamic_company(final_url, soup)
 
@@ -5817,6 +5867,29 @@ def run_self_test() -> None:
         "identity governance controls across enterprise applications."
     )
     print("PASS | Anson McCade vacancy ID and substantive job description evidence")
+    # The real site labels its generic h1 "Vacancy detail"; the IAM role is h2.
+    anson_html = (
+        "<h1>Vacancy detail</h1><h2>Senior Business Analyst (IAM)</h2>"
+        "<div>Location: Central London, Greater London – United Kingdom "
+        "Type: Permanent</div>"
+        "<p>About the role: We are looking for an Identity and Access "
+        "Management specialist with experience in Entra ID, RBAC, "
+        "provisioning and governance. Responsibilities include gathering "
+        "stakeholder requirements, mapping access controls and identity "
+        "journeys, defining entitlements, supporting SSO implementations, "
+        "validating IAM solutions and collaborating with engineering teams "
+        "on critical infrastructure transformation programmes.</p>"
+    )
+    anson_result = extract_anson_mccade_job_result(
+        BeautifulSoup(anson_html, "html.parser"), anson, "self-test"
+    )
+    assert anson_result is not None
+    assert anson_result["title"] == "Senior Business Analyst (IAM)"
+    assert anson_result["employment_type"] == "Permanent"
+    assert "London" in anson_result["location"]
+    assert anson_result["description_verified"] == "YES"
+    print("PASS | Anson McCade h2 title, permanent UK location and description")
+
 
     cases = [
         (
