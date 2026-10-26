@@ -1680,6 +1680,11 @@ def explicit_non_permanent(
 
 
 
+# Confirmed filled requisitions whose ATS may retain stale structured data.
+KNOWN_CLOSED_JOB_URL_MARKERS = (
+    "jobs.pwc.co.uk/uk/en/job/pudpunuk700864wdexternalenuk/",
+)
+
 CLOSED_JOB_PATTERNS = [
     r"\bposition has been filled\b",
     r"\bthis position has been filled\b",
@@ -3716,6 +3721,9 @@ def build_result(
     if is_closed_job_page(title, description):
         return None
 
+    if any(marker in original_url.lower() for marker in KNOWN_CLOSED_JOB_URL_MARKERS):
+        return None
+
     full_text = f"{title} {description} {location}"
 
     if not employment_type:
@@ -4561,6 +4569,18 @@ def scan_greenhouse(
     return results
 
 
+def lever_posted_date(job: Dict[str, Any]) -> str:
+    """Use Lever's original posting creation timestamp, not scan time."""
+    created_at = job.get("createdAt")
+    try:
+        timestamp = float(created_at)
+        if timestamp <= 0:
+            return ""
+        return datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
 def scan_lever(
     company_name: str,
     board: str,
@@ -4639,6 +4659,7 @@ def scan_lever(
                 location=location,
                 url=url,
                 method="Lever Public API",
+                date_posted=lever_posted_date(job),
                 employment_type=str(categories.get("commitment", "") or ""),
             )
 
@@ -6143,6 +6164,20 @@ def run_self_test() -> None:
         failures.append(
             "closed vacancy rejection"
         )
+
+    # Regression: the official PwC page is filled despite stale JobPosting data.
+    assert build_result(
+        company=("PwC UK", ["pwc.co.uk"], []),
+        title="Manager - Identity and Access Management",
+        description="Identity governance, SailPoint, CyberArk and Entra ID",
+        location="London, United Kingdom",
+        url="https://jobs.pwc.co.uk/uk/en/job/PUDPUNUK700864WDEXTERNALENUK/Manager-Identity-and-Access-Management",
+        method="self-test",
+        employment_type="Full time",
+    ) is None
+    assert lever_posted_date({"createdAt": 1793000000000}).startswith("2026-")
+    assert lever_posted_date({"createdAt": "invalid"}) == ""
+    print("PASS | known filled PwC requisition and original Lever creation date")
 
     # Real-world expired-page banners and aggregator URLs must not survive
     # source validation, even when stale structured metadata exists.
