@@ -3338,7 +3338,7 @@ def extract_anson_mccade_job_result(
         return None
 
     headings = [
-        re.sub(r"\\s+", " ", h.get_text(" ", strip=True)).strip()
+        re.sub(r"\s+", " ", h.get_text(" ", strip=True)).strip()
         for h in soup.find_all(["h2", "h3"])
     ]
     title = next(
@@ -3351,10 +3351,10 @@ def extract_anson_mccade_job_result(
     if not title:
         return None
 
-    text = re.sub(r"\\s+", " ", soup.get_text(" ", strip=True)).strip()
+    text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
     header = re.search(
-        r"\\bLocation\\s*:\\s*(.{3,120}?)\\s+Type\\s*:\\s*"
-        r"(Permanent|Contract|Temporary|Fixed[- ]Term|Interim)\\b",
+        r"\bLocation\s*:\s*(.{3,120}?)\s+Type\s*:\s*"
+        r"(Permanent|Contract|Temporary|Fixed[- ]Term|Interim)\b",
         text, re.I,
     )
     if not header:
