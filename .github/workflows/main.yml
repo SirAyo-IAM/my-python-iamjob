@@ -173,7 +173,29 @@ jobs:
           assert is_blocked_job_board(aggregator["url"])
           assert not looks_like_official_job_candidate(aggregator["url"])
           assert not is_blocked_job_board(base["url"])
-          print("PASS | NEW-only eligibility, seven-day freshness, multi-city deduplication and aggregator rejection")
+          from unittest.mock import patch
+          from send_email import live_application_page
+          class Page:
+              status_code = 200
+              url = base["url"]
+              text = ("<h1>IAM Service Operations Engineer</h1>"
+                      "<p>Identity and access management responsibilities include "
+                      "identity lifecycle provisioning, SailPoint governance, "
+                      "Microsoft Entra ID authentication, incident resolution and "
+                      "access reviews. Required experience with IAM operations, "
+                      "stakeholder collaboration and identity controls.</p>"
+                      "<a href='/apply'>Apply now</a>")
+          with patch("send_email.requests.get", return_value=Page()):
+              assert live_application_page(base)
+          class ClosedPage(Page):
+              text = "This job is no longer available. " + Page.text
+          with patch("send_email.requests.get", return_value=ClosedPage()):
+              assert not live_application_page(base)
+          class MissingPage(Page):
+              status_code = 404
+          with patch("send_email.requests.get", return_value=MissingPage()):
+              assert not live_application_page(base)
+          print("PASS | description, permanent UK IAM eligibility, live application and closure guards")
           PY
 
       - name: Run UK IAM Hunter V5.4
