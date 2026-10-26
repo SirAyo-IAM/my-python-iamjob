@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Email UK IAM Job Hunter V5.4 results through Brevo."""
 from __future__ import annotations
-import csv, html, os, sys
+import csv, html, os, re, sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List
 from urllib.parse import urlparse
 import requests
+from bs4 import BeautifulSoup
 
 RESULT_CSV = Path(os.getenv("IAM_EMAIL_RESULTS_FILE", "uk_iam_new_results.csv"))
 BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
@@ -98,6 +99,52 @@ def email_worthy(job: Dict[str, str]) -> bool:
     if has_foreign and not has_uk: return False
     return True
 
+def live_application_page(job: Dict[str, str]) -> bool:
+    """Fail closed unless the current official vacancy page is retrievable.
+
+    The Hunter previously fetched the job detail/API for its metadata; this
+    second check catches pages closed or redirected before email delivery.
+    A blocked/JS-only page is withheld rather than called live without proof.
+    """
+    url = str(job.get("url") or job.get("canonical_url") or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    if parsed.path.lower().rstrip("/") in {"", "/jobs", "/careers", "/vacancies", "/job-search"}:
+        return False
+    try:
+        response = requests.get(
+            url, timeout=12, allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; UK-IAM-Hunter/5.4)"},
+        )
+        if response.status_code != 200:
+            return False
+        final = urlparse(str(getattr(response, "url", "") or url))
+        if final.scheme not in {"http", "https"}:
+            return False
+        final_host = (final.hostname or "").lower()
+        if any(final_host == d or final_host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS):
+            return False
+        if final.path.lower().rstrip("/") in {"", "/jobs", "/careers", "/vacancies", "/job-search"}:
+            return False
+        body = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
+        if len(body) < 180:
+            return False
+        from uk_iam_hunter import is_closed_job_page
+        if is_closed_job_page("", body[:2500]):
+            return False
+        tokens = [
+            term for term in re.findall(r"[a-z0-9]+", str(job.get("title", "")).lower())
+            if len(term) >= 3 and term not in {"senior", "junior", "lead", "principal"}
+        ]
+        lower = body.lower()
+        if not tokens or sum(term in lower for term in tokens) < min(2, len(tokens)):
+            return False
+        return bool(re.search(r"\b(?:apply|application|submit your cv)\b", lower))
+    except (requests.RequestException, ValueError, TypeError):
+        return False
+
+
 def deduplicate_email_jobs(jobs: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Notify once for same-employer/title postings released on the same day.
 
@@ -164,6 +211,12 @@ def main() -> None:
     if suppressed: print(f"Suppressed {suppressed} non-eligible or duplicate notification candidate(s).")
     if not jobs:
         print("No email-worthy NEW IAM jobs this run. Email not sent."); return
+    checked = [job for job in jobs if live_application_page(job)]
+    if len(checked) != len(jobs):
+        print(f"Withheld {len(jobs) - len(checked)} job(s): live vacancy/application page could not be verified.")
+    jobs = checked
+    if not jobs:
+        print("No live, verified NEW IAM vacancies. Email not sent."); return
     payload=build_payload(jobs,require_env("BREVO_SENDER_EMAIL"),require_env("REPORT_EMAIL"))
     print(f"Preparing IAM email with {len(jobs)} NEW result(s)...")
     message_id=send_report(require_env("BREVO_API_KEY"),payload)
