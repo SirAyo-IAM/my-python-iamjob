@@ -101,6 +101,38 @@ def email_worthy(job: Dict[str, str]) -> bool:
     if has_foreign and not has_uk: return False
     return True
 
+def application_deadline_has_passed(body: str, today=None) -> bool:
+    """Reject vacancies with an explicit, elapsed application closing date.
+
+    Ignore unrelated dates and undated/ambiguous deadlines. If an employer
+    displays a revised later deadline, prefer the latest labelled date.
+    """
+    today = today or datetime.now(UK_TZ).date()
+    date_pattern = (
+        r"(?P<date>\\d{4}-\\d{2}-\\d{2}|"
+        r"\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+\\d{4}|"
+        r"[A-Za-z]+\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4})"
+    )
+    label_pattern = re.compile(
+        r"\\b(?:closing date(?: for applications)?|application deadline|"
+        r"applications close|end date)\\s*(?::|is\\b|[-–])?\\s*"
+        r"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\\s+)?"
+        + date_pattern,
+        re.I,
+    )
+    deadlines = []
+    for match in label_pattern.finditer(body):
+        raw = re.sub(r"(?<=\\d)(?:st|nd|rd|th)\\b", "", match.group("date"), flags=re.I)
+        raw = raw.replace(",", "").strip()
+        for fmt in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
+            try:
+                deadlines.append(datetime.strptime(raw, fmt).date())
+                break
+            except ValueError:
+                continue
+    return bool(deadlines) and max(deadlines) < today
+
+
 def live_application_page(job: Dict[str, str]) -> bool:
     """Fail closed unless the current official vacancy page is retrievable.
 
@@ -137,7 +169,7 @@ def live_application_page(job: Dict[str, str]) -> bool:
         body = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
         if len(body) < 180:
             return False
-        if is_closed_job_page("", body[:2500]):
+        if is_closed_job_page("", body[:2500]) or application_deadline_has_passed(body):
             return False
         tokens = [
             term for term in re.findall(r"[a-z0-9]+", str(job.get("title", "")).lower())
