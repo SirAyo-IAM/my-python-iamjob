@@ -184,18 +184,18 @@ def live_application_page(job: Dict[str, str]) -> bool:
 
 
 def deduplicate_email_jobs(jobs: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Notify once for same-employer/title postings released on the same day.
+    """Deduplicate by the Hunter's stable employer/requisition/official-URL identity.
 
-    Keep the London option when an employer advertises the same role in
-    multiple UK cities. Both distinct ATS URLs remain in the full audit CSV.
+    Do not merge different requisitions merely because employer, title and
+    posting date are identical. This preserves distinct UK openings while
+    suppressing tracking-URL duplicates and genuine multi-location reposts.
     """
+    from uk_iam_hunter import job_state_identity
+
     kept: List[Dict[str, str]] = []
-    index: Dict[tuple, int] = {}
+    index: Dict[str, int] = {}
     for job in jobs:
-        company = " ".join(str(job.get("company", "") or "").lower().split())
-        title = " ".join(str(job.get("title", "") or "").lower().split())
-        posted = str(job.get("date_posted", "") or "")[:10]
-        key = (company, title, posted)
+        key = job_state_identity(job)
         if key in index:
             previous = kept[index[key]]
             if "london" in str(job.get("location", "")).lower() and "london" not in str(previous.get("location", "")).lower():
