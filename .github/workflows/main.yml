@@ -147,8 +147,20 @@ jobs:
           }
           london = {**base, "location": "London, United Kingdom",
                     "url": "https://jobs.smartrecruiters.com/Netcompany1/456"}
-          assert len(deduplicate_email_jobs([base, london])) == 1
-          assert deduplicate_email_jobs([base, london])[0]["location"].startswith("London")
+          # Separate requisitions must not be collapsed just because title/date match.
+          assert len(deduplicate_email_jobs([base, london])) == 2
+          # Tracking variants and the same employer requisition must be deduplicated.
+          same_job = {**base, "location": "London, United Kingdom",
+                      "url": base["url"] + "?utm_source=linkedin"}
+          assert len(deduplicate_email_jobs([base, same_job])) == 1
+          assert deduplicate_email_jobs([base, same_job])[0]["location"].startswith("London")
+          same_ref = {**london, "job_reference": "REQ-123"}
+          first_ref = {**base, "job_reference": "REQ-123"}
+          assert len(deduplicate_email_jobs([first_ref, same_ref])) == 1
+          from uk_iam_hunter import canonical_url
+          a1 = canonical_url("https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247")
+          a2 = canonical_url("https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104067")
+          assert a1 != a2 and "vacancy_id=104247" in a1
           assert not email_worthy({**base, "company": ""})
           assert not email_worthy({**base, "employment_type": "Contract"})
           assert email_worthy(london)
