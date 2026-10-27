@@ -63,6 +63,10 @@ DIRECT_JOB_SEEDS = [
     "https://morningstar.wd5.myworkdayjobs.com/en-US/morningstar/job/London/Lead-IAM-Engineer_REQ-057147",
     "https://jobs.sizewellc.com/job/London-Identity-and-Access-Management-Lead-EC2R-7BP/1435888933/",
     "https://www.accenture.com/gb-en/careers/jobdetails?id=R00325732_en",
+    # Independent 27 Oct audit: official pages remain live but were missed by the main 180-candidate budget.
+    "https://careers.hippodigital.co.uk/vacancies/1574/senior-iam-governance-analyst.html",
+    "https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247",
+    "https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104067",
     # Additional verified official UK permanent IAM/PAM vacancies (27 Oct 2026).
     "https://tmhcc.wd108.myworkdayjobs.com/en-US/External/job/Identity-Systems-Engineer--CyberArk-_2026-359",
     "https://bupa.wd3.myworkdayjobs.com/en-GB/EXT_CAREER/job/IAM-Lead-Engineer_R1215795",
