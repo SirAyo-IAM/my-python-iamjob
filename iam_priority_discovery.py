@@ -63,6 +63,11 @@ DIRECT_JOB_SEEDS = [
     "https://morningstar.wd5.myworkdayjobs.com/en-US/morningstar/job/London/Lead-IAM-Engineer_REQ-057147",
     "https://jobs.sizewellc.com/job/London-Identity-and-Access-Management-Lead-EC2R-7BP/1435888933/",
     "https://www.accenture.com/gb-en/careers/jobdetails?id=R00325732_en",
+    # Additional verified official UK permanent IAM/PAM vacancies (27 Oct 2026).
+    "https://tmhcc.wd108.myworkdayjobs.com/en-US/External/job/Identity-Systems-Engineer--CyberArk-_2026-359",
+    "https://bupa.wd3.myworkdayjobs.com/en-GB/EXT_CAREER/job/IAM-Lead-Engineer_R1215795",
+    "https://jobs.smartrecruiters.com/TheAA1/744000155022738-identity-access-manager",
+
 
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
@@ -101,6 +106,10 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:jobs.ashbyhq.com/clearbank (IAM OR "Identity and Access" OR "Identity Security")',
     'site:jobs.ashbyhq.com/primer.io (IAM OR "Identity" OR "Access Governance")',
     'site:jobs.smartrecruiters.com/Netcompany1 (IAM OR "Identity and Access" OR SailPoint)',
+    'site:tmhcc.wd108.myworkdayjobs.com/External (CyberArk OR "Identity Systems" OR IAM) London',
+    'site:bupa.wd3.myworkdayjobs.com/EXT_CAREER (CyberArk OR BeyondTrust OR "IAM Lead Engineer")',
+    'site:jobs.smartrecruiters.com/TheAA1 ("Identity & Access" OR IAM OR PAM)',
+
     'site:jobs.lever.co/sophos ("Identity Engineer" OR Saviynt OR Entra)',
     'site:job-boards.eu.greenhouse.io/mangroup/jobs (SailPoint OR "Technical IAM" OR "Identity") London',
     'site:nccgroup.pinpointhq.com/postings (IAM OR "Identity Governance" OR CyberArk)',
