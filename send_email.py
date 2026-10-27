@@ -109,20 +109,20 @@ def application_deadline_has_passed(body: str, today=None) -> bool:
     """
     today = today or datetime.now(UK_TZ).date()
     date_pattern = (
-        r"(?P<date>\\d{4}-\\d{2}-\\d{2}|"
-        r"\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]+\\s+\\d{4}|"
-        r"[A-Za-z]+\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4})"
+        r"(?P<date>\d{4}-\d{2}-\d{2}|"
+        r"\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}|"
+        r"[A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4})"
     )
     label_pattern = re.compile(
-        r"\\b(?:closing date(?: for applications)?|application deadline|"
-        r"applications close|end date)\\s*(?::|is\\b|[-–])?\\s*"
-        r"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\\s+)?"
+        r"\b(?:closing date(?: for applications)?|application deadline|"
+        r"applications close|end date)\s*(?::|is\b|[-–])?\s*"
+        r"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+)?"
         + date_pattern,
         re.I,
     )
     deadlines = []
     for match in label_pattern.finditer(body):
-        raw = re.sub(r"(?<=\\d)(?:st|nd|rd|th)\\b", "", match.group("date"), flags=re.I)
+        raw = re.sub(r"(?<=\d)(?:st|nd|rd|th)\b", "", match.group("date"), flags=re.I)
         raw = raw.replace(",", "").strip()
         for fmt in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
             try:
