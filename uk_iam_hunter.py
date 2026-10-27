@@ -3050,6 +3050,9 @@ def company_name_from_soup(soup: BeautifulSoup, url: str) -> str:
 
 
 def dynamic_company(url: str, soup: Optional[BeautifulSoup] = None) -> Tuple[str, List[str], List[str]]:
+    # Jobvite's page chrome can be mistaken for the employer name.
+    if host(url) == "jobs.jobvite.com" and urlparse(url).path.lower().startswith("/maplesandcalder/"):
+        return ("Maples Group", [host(url)], [])
     name = company_name_from_soup(soup, url) if soup is not None else host(url)
     return (name or "Discovered Employer", [host(url)], [])
 
@@ -5845,6 +5848,8 @@ def display_audit(
 # ============================================================================
 
 def run_self_test() -> None:
+    assert dynamic_company("https://jobs.jobvite.com/maplesandcalder/job/onoBAfwG")[0] == "Maples Group"
+    print("PASS | Maples Group employer attribution on Jobvite")
     """Comprehensive offline regression tests for V5.4.
 
     Covers classifier precision/recall, location handling, listing-page
