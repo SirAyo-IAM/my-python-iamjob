@@ -195,6 +195,19 @@ jobs:
               status_code = 404
           with patch("send_email.requests.get", return_value=MissingPage()):
               assert not live_application_page(base)
+          # Do not advertise vacancies whose explicit application deadline has elapsed.
+          from datetime import date
+          from send_email import application_deadline_has_passed
+          today = date(2026, 10, 27)
+          assert application_deadline_has_passed("Closing date: 19 October 2026", today)
+          assert application_deadline_has_passed("End Date: October 16, 2026", today)
+          assert application_deadline_has_passed("Closing date for applications: Tuesday 29th September 2026", today)
+          assert application_deadline_has_passed("Applications close 2026-10-26", today)
+          assert not application_deadline_has_passed("Closing date: 27 November 2026", today)
+          assert not application_deadline_has_passed("Closing date: 19 October 2026. Revised end date: 27 November 2026", today)
+          assert not application_deadline_has_passed("Posted 12 October 2026", today)
+          assert not application_deadline_has_passed("Closing date: 29 September", today)
+          print("PASS | explicit application deadline freshness guard")
           print("PASS | description, permanent UK IAM eligibility, live application and closure guards")
           PY
 
