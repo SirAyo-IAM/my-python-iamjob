@@ -5848,14 +5848,14 @@ def display_audit(
 # ============================================================================
 
 def run_self_test() -> None:
-    assert dynamic_company("https://jobs.jobvite.com/maplesandcalder/job/onoBAfwG")[0] == "Maples Group"
-    print("PASS | Maples Group employer attribution on Jobvite")
     """Comprehensive offline regression tests for V5.4.
 
     Covers classifier precision/recall, location handling, listing-page
     rejection, match-type categorisation, Barclays/TalentBrew discovery and
     metadata extraction, and Qube Greenhouse URL identity.
     """
+    assert dynamic_company("https://jobs.jobvite.com/maplesandcalder/job/onoBAfwG")[0] == "Maples Group"
+    print("PASS | Maples Group employer attribution on Jobvite")
     # Actual Anson McCade vacancy IDs must survive canonicalisation, and
     # title-only snippets must never qualify as verified descriptions.
     anson = "https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247"
