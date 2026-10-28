@@ -4981,91 +4981,42 @@ def scan_ats_board(
 def deduplicate(
     results: Iterable[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+    """Keep distinct official requisitions even when title and city match.
 
-    output = []
-
-    seen_urls = set()
-    seen_titles = set()
+    Canonical URL identifies the individual vacancy; employer + explicit
+    requisition reference is a secondary identity across discovery routes.
+    A fuzzy title/location fallback applies only to records without either.
+    """
+    output: List[Dict[str, Any]] = []
+    seen_urls: Set[str] = set()
+    seen_references: Set[str] = set()
+    seen_fallback: Set[str] = set()
 
     for item in results:
+        url_key = canonical_url(str(item.get("canonical_url") or item.get("url") or ""))
+        company = re.sub(r"[^a-z0-9]+", " ", str(item.get("company", "")).lower()).strip()
+        title = re.sub(r"[^a-z0-9]+", " ", str(item.get("title", "")).lower()).strip()
+        location = re.sub(r"[^a-z0-9]+", " ", str(item.get("location", "")).lower()).strip()
+        reference = re.sub(r"[^a-z0-9]+", "", str(item.get("job_reference", "")).lower()).strip()
+        reference_key = f"{company}|{reference}" if company and reference else ""
+        fallback_key = f"{company}|{title}|{location}" if company and title else ""
 
-        url_key = (
-            item.get(
-                "canonical_url",
-                "",
-            )
-            or canonical_url(
-                item.get(
-                    "url",
-                    "",
-                )
-            )
-        )
-
-        company = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            item.get(
-                "company",
-                "",
-            ).lower(),
-        ).strip()
-
-        title = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            item.get(
-                "title",
-                "",
-            ).lower(),
-        ).strip()
-
-        location = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            item.get("location", "").lower(),
-        ).strip()
-
-        reference = re.sub(
-            r"[^a-z0-9]+",
-            "",
-            item.get("job_reference", "").lower(),
-        ).strip()
-
-        fuzzy_key = (
-            f"{company}|{title}|{reference or location}"
-        )
-
-        # URL is strongest.
-        if (
-            url_key
-            and url_key in seen_urls
-        ):
+        if url_key and url_key in seen_urls:
             continue
-
-        # Same company + same role from multiple discovery routes.
-        if (
-            fuzzy_key
-            and fuzzy_key in seen_titles
-        ):
+        if reference_key and reference_key in seen_references:
+            continue
+        if not url_key and not reference_key and fallback_key in seen_fallback:
             continue
 
         if url_key:
-            seen_urls.add(
-                url_key
-            )
-
-        if fuzzy_key:
-            seen_titles.add(
-                fuzzy_key
-            )
-
-        output.append(
-            item
-        )
+            seen_urls.add(url_key)
+        if reference_key:
+            seen_references.add(reference_key)
+        if not url_key and not reference_key and fallback_key:
+            seen_fallback.add(fallback_key)
+        output.append(item)
 
     return output
-
 
 # ============================================================================
 # PERSISTENT NEW-JOB STATE
@@ -6405,6 +6356,28 @@ def run_self_test() -> None:
 
     globals()["STATE_DIR"] = original_state_dir
     globals()["SEEN_STATE_FILE"] = original_state_file
+
+    # Different requisitions at the same employer/city must never be merged
+    # merely because they share an IAM job title.
+    vacancy_base = {
+        "company": "Anson McCade",
+        "title": "Senior Business Analyst (IAM)",
+        "location": "London, United Kingdom",
+        "job_reference": "",
+    }
+    vacancy_a = {**vacancy_base, "url": "https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247"}
+    vacancy_b = {**vacancy_base, "url": "https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104067"}
+    vacancy_tracking = {**vacancy_a, "url": vacancy_a["url"] + "&utm_source=linkedin"}
+    same_ref_a = {**vacancy_a, "job_reference": "AMC/DMI/SBA"}
+    same_ref_b = {**vacancy_b, "job_reference": "AMC/DMI/SBA"}
+    dedup_ok = (
+        len(deduplicate([vacancy_a, vacancy_b])) == 2
+        and len(deduplicate([vacancy_a, vacancy_tracking])) == 1
+        and len(deduplicate([same_ref_a, same_ref_b])) == 1
+    )
+    print(f"{'PASS' if dedup_ok else 'FAIL'} | distinct official vacancy IDs and stable requisition dedup")
+    if not dedup_ok:
+        failures.append("distinct vacancy IDs/dedup")
 
     if failures:
         raise RuntimeError("V5.4 self-test failed: " + ", ".join(failures))
