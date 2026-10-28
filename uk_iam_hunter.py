@@ -1216,6 +1216,7 @@ ATS_BOARDS = [
     ("Sophos", "lever", "sophos"),
     ("Netcompany", "smartrecruiters", "Netcompany1"),
     ("Man Group", "greenhouse", "mangroup"),
+    ("Ebury", "greenhouse", "ebury"),  # Official EU Greenhouse identity-team vacancies
     ("Revolut", "lever", "revolut"),
     ("Canonical", "lever", "canonical"),
     ("Starling Bank", "workable", "starling-bank"),
@@ -6321,9 +6322,11 @@ def run_self_test() -> None:
     netcompany_ok = ("Netcompany", "smartrecruiters", "Netcompany1") in ATS_BOARDS
     man_group_ok = (("Man Group", "greenhouse", "mangroup") in ATS_BOARDS and
                     greenhouse_identity_from_url("https://job-boards.eu.greenhouse.io/mangroup/jobs/4997701101") == ("mangroup", "4997701101"))
-    print(f"{'PASS' if banner_ok and board_ok and sophos_ok and netcompany_ok and man_group_ok else 'FAIL'} | "
+    ebury_ok = (("Ebury", "greenhouse", "ebury") in ATS_BOARDS and
+                greenhouse_identity_from_url("https://job-boards.eu.greenhouse.io/ebury/jobs/4922605101") == ("ebury", "4922605101"))
+    print(f"{'PASS' if banner_ok and board_ok and sophos_ok and netcompany_ok and man_group_ok and ebury_ok else 'FAIL'} | "
           "closed-page banners, aggregator rejection and Sophos Lever coverage")
-    if not (banner_ok and board_ok and sophos_ok and netcompany_ok and man_group_ok):
+    if not (banner_ok and board_ok and sophos_ok and netcompany_ok and man_group_ok and ebury_ok):
         failures.append("closed-banner/aggregator/Lever regression")
 
     # Persistent state: first run is NEW, identical second run is SEEN, a
