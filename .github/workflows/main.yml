@@ -131,6 +131,21 @@ jobs:
           python - <<'PY'
           from datetime import datetime, timedelta, timezone
           from send_email import deduplicate_email_jobs, email_worthy
+          # User-reported missed official vacancies must remain discovery seeds.
+          # These are candidate inputs, not automatic emails: the live UK,
+          # permanent, original-date and relevance filters still apply.
+          from iam_priority_discovery import DIRECT_JOB_SEEDS, PRIORITY_OFFICIAL_QUERIES
+          for fragment in (
+              "/JobDetail/218148",
+              "/ebury/jobs/4922605101",
+              "/jobs/t-R0052359",
+              "/Senior-IDM_JR1001116",
+          ):
+              assert any(fragment in url for url in DIRECT_JOB_SEEDS), fragment
+          for domain in ("careers.tesco.com", "greenhouse.io/ebury",
+                         "careers.sky.com", "cloudpay.wd3.myworkdayjobs.com"):
+              assert any(domain in query for query in PRIORITY_OFFICIAL_QUERIES), domain
+          print("PASS | Tesco, Ebury, Sky and CloudPay official-source regression seeds")
           base = {
               "company": "Netcompany",
               "title": "IAM Service Operations Engineer",
