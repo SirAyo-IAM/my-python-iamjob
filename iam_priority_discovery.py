@@ -73,6 +73,13 @@ DIRECT_JOB_SEEDS = [
     "https://jobs.smartrecruiters.com/TheAA1/744000155022738-identity-access-manager",
 
 
+    # User-reported October 2026 misses: all remain subject to live-page,
+    # UK/permanent, IAM relevance and original-posting-date safeguards.
+    "https://careers.tesco.com/en_GB/careers/JobDetail/218148",
+    "https://job-boards.eu.greenhouse.io/ebury/jobs/4922605101",
+    "https://careers.sky.com/jobs/t-R0052359",
+    "https://cloudpay.wd3.myworkdayjobs.com/CloudPay_External/job/Andover-United-Kingdom/Senior-IDM_JR1001116",
+
     # User-provided regression cases / platform families.
     "https://careers.astonmartin.com/mob/en/job/512173/identity-and-access-management-specialist",
     "https://jobs.ashbyhq.com/allica-bank/cbc13a4d-2bc2-4e92-b4a1-c31284b894fc/application",
@@ -114,6 +121,11 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:bupa.wd3.myworkdayjobs.com/EXT_CAREER (CyberArk OR BeyondTrust OR "IAM Lead Engineer")',
     'site:jobs.smartrecruiters.com/TheAA1 ("Identity & Access" OR IAM OR PAM)',
 
+    # Official employer/ATS sweeps for four confirmed discovery blind spots.
+    'site:careers.tesco.com/en_GB/careers/JobDetail (IAM OR "Identity and Access" OR "Access Management")',
+    'site:job-boards.eu.greenhouse.io/ebury/jobs (IAM OR "Identity Team" OR "Access Governance" OR "Identity") London',
+    'site:careers.sky.com/jobs (IAM OR "Identity and Access" OR "One Identity")',
+    'site:cloudpay.wd3.myworkdayjobs.com/CloudPay_External/job (IDM OR IAM OR "Identity Management" OR ForgeRock)',
     'site:jobs.lever.co/sophos ("Identity Engineer" OR Saviynt OR Entra)',
     'site:job-boards.eu.greenhouse.io/mangroup/jobs (SailPoint OR "Technical IAM" OR "Identity") London',
     'site:nccgroup.pinpointhq.com/postings (IAM OR "Identity Governance" OR CyberArk)',
