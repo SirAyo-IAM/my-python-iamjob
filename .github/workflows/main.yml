@@ -134,7 +134,7 @@ jobs:
           # User-reported missed official vacancies must remain discovery seeds.
           # These are candidate inputs, not automatic emails: the live UK,
           # permanent, original-date and relevance filters still apply.
-          from iam_priority_discovery import DIRECT_JOB_SEEDS, PRIORITY_OFFICIAL_QUERIES
+          from iam_priority_discovery import DIRECT_JOB_SEEDS, PRIORITY_OFFICIAL_QUERIES, recover_tesco_employment_type
           for fragment in (
               "/JobDetail/218148",
               "/ebury/jobs/4922605101",
@@ -146,6 +146,18 @@ jobs:
                          "careers.sky.com", "cloudpay.wd3.myworkdayjobs.com"):
               assert any(domain in query for query in PRIORITY_OFFICIAL_QUERIES), domain
           print("PASS | Tesco, Ebury, Sky and CloudPay official-source regression seeds")
+          # Tesco can publish employmentType=[''] in JSON-LD even when the
+          # official job description explicitly states Edinburgh, Permanent.
+          tesco = {
+              "url": "https://careers.tesco.com/en_GB/careers/JobDetail/218148",
+              "employment_type": "['']",
+              "description_excerpt": "Location – Edinburgh, Permanent Office Attendance – Hybrid",
+          }
+          assert recover_tesco_employment_type(tesco)["employment_type"] == "Permanent"
+          assert recover_tesco_employment_type({**tesco, "description_excerpt": "Location – Edinburgh, Contract"})["employment_type"] == "['']"
+          assert recover_tesco_employment_type({**tesco, "url": "https://example.com/jobs/123"})["employment_type"] == "['']"
+          assert recover_tesco_employment_type({**tesco, "employment_type": "Fixed-term"})["employment_type"] == "Fixed-term"
+          print("PASS | Tesco explicit permanent evidence recovery; no full-time inference")
           base = {
               "company": "Netcompany",
               "title": "IAM Service Operations Engineer",
