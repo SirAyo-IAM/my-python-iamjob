@@ -265,6 +265,28 @@ def write_json_results(path: Path, results: List[Dict[str, Any]], count_key: str
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
+def recover_tesco_employment_type(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Recover explicit permanent status when Tesco JSON-LD omits it.
+
+    Do not infer permanence from full-time hours or generic page footers.
+    The role-specific description must explicitly label the job location
+    as permanent, and only Tesco's official career domain is supported.
+    """
+    recovered = dict(job)
+    if hunter.host(str(recovered.get("url", ""))) != "careers.tesco.com":
+        return recovered
+    current = str(recovered.get("employment_type", "") or "").lower()
+    if any(term in current for term in (
+        "contract", "fixed", "temporary", "interim",
+        "permanent", "regular", "indefinite",
+    )):
+        return recovered
+    excerpt = str(recovered.get("description_excerpt", "") or "")
+    if re.search(r"\bLocation\s*[-–—:]\s*[^.;\n]{1,130}?,\s*Permanent\b", excerpt, re.I):
+        recovered["employment_type"] = "Permanent"
+    return recovered
+
+
 def discover() -> List[Dict[str, Any]]:
     candidates: List[str] = list(DIRECT_JOB_SEEDS)
     session = hunter.make_session()
@@ -307,7 +329,7 @@ def discover() -> List[Dict[str, Any]]:
             if hunter.host(url) == "job-boards.eu.greenhouse.io" and "/mangroup/jobs/" in url.lower():
                 for job in extracted:
                     job["company"] = "Man Group"
-            results.extend(extracted)
+            results.extend(recover_tesco_employment_type(job) for job in extracted)
         except Exception:
             continue
 
