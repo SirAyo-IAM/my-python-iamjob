@@ -1945,7 +1945,8 @@ def extract_posted_date(text: str) -> str:
         r"(?:posted|posting date|date posted)"
         r"\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
 
-        # Do not infer publication from unrelated ISO dates such as\n        # application deadlines or page update timestamps.
+        # Do not infer publication from unrelated ISO dates such as
+        # application deadlines or page update timestamps.
     ]
 
     for pattern in patterns:
