@@ -247,6 +247,15 @@ jobs:
           assert not application_deadline_has_passed("Posted 12 October 2026", today)
           assert not application_deadline_has_passed("Closing date: 29 September", today)
           print("PASS | explicit application deadline freshness guard")
+          from send_email import email_rejection_reasons
+          assert email_rejection_reasons(base) == []
+          assert "permanent employment not evidenced" in email_rejection_reasons({**base, "employment_type": "Full-time"})
+          assert "non-permanent employment" in email_rejection_reasons({**base, "employment_type": "Contract"})
+          assert "original posting date missing" in email_rejection_reasons({**base, "date_posted": ""})
+          assert "substantive job description not verified" in email_rejection_reasons({**base, "description_verified": "NO"})
+          assert "UK job location not confirmed" in email_rejection_reasons({**base, "location_status": "UK UNKNOWN"})
+          assert email_worthy(base) == (not email_rejection_reasons(base))
+          print("PASS | per-vacancy withholding reasons preserve fail-closed email rules")
           print("PASS | description, permanent UK IAM eligibility, live application and closure guards")
           PY
 
