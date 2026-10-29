@@ -1945,7 +1945,7 @@ def extract_posted_date(text: str) -> str:
         r"(?:posted|posting date|date posted)"
         r"\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
 
-        r"\b(20\d{2}-\d{2}-\d{2})\b",
+        # Do not infer publication from unrelated ISO dates such as\n        # application deadlines or page update timestamps.
     ]
 
     for pattern in patterns:
@@ -6256,6 +6256,11 @@ def run_self_test() -> None:
     ) is None
     assert lever_posted_date({"createdAt": 1793000000000}).startswith("2026-")
     assert lever_posted_date({"createdAt": "invalid"}) == ""
+    # An unlabelled deadline must never masquerade as a fresh posting.
+    assert extract_posted_date("Closing date: 2026-10-29") == ""
+    assert extract_posted_date("Updated 2026-10-29") == ""
+    assert extract_posted_date("Posted: 2026-10-27") == "2026-10-27"
+    assert extract_posted_date("Date Posted: 2026-10-27") == "2026-10-27"
     print("PASS | known filled PwC requisition and original Lever creation date")
 
     # Real-world expired-page banners and aggregator URLs must not survive
