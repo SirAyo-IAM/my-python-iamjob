@@ -54,52 +54,67 @@ def recommend_cv(job: Dict[str, str]) -> str:
     if any(t in haystack for t in ("entra id", "microsoft entra", "azure ad", "azure active directory", "conditional access", "azure ad connect", "microsoft graph")): return CV_OPERATIONAL
     return CV_GENERAL
 
-def email_worthy(job: Dict[str, str]) -> bool:
+def email_rejection_reasons(job: Dict[str, str]) -> List[str]:
+    """Explain each notification gate without relaxing any eligibility rule.
+
+    Discovery may retain a role for auditing even when it cannot be emailed.
+    This single function powers both the safety gate and its diagnostics.
+    """
+    reasons: List[str] = []
     title = str(job.get("title", "") or "").strip().lower()
     company = str(job.get("company", "") or "").strip()
-    if not company or company.lower() in {"unknown", "discovered employer"}: return False
-    # Fail closed: a relevant title alone is not a verified vacancy.
-    # These fields are derived from the fetched official job detail or live ATS API.
-    if str(job.get("description_verified", "")).strip().upper() != "YES": return False
-    if str(job.get("location_status", "")).strip().upper() != "UK CONFIRMED": return False
-    if str(job.get("match_type", "")).strip().upper() not in {"CORE IAM", "ADJACENT IDENTITY/SECURITY"}: return False
+    if not company or company.lower() in {"unknown", "discovered employer"}:
+        reasons.append("unverified employer")
+    if str(job.get("description_verified", "")).strip().upper() != "YES":
+        reasons.append("substantive job description not verified")
+    if str(job.get("location_status", "")).strip().upper() != "UK CONFIRMED":
+        reasons.append("UK job location not confirmed")
+    if str(job.get("match_type", "")).strip().upper() not in {"CORE IAM", "ADJACENT IDENTITY/SECURITY"}:
+        reasons.append("IAM classification not confirmed")
     try:
-        if int(float(str(job.get("match_score", "") or "0"))) < 75: return False
+        if int(float(str(job.get("match_score", "") or "0"))) < 75:
+            reasons.append("IAM relevance score below 75")
     except (ValueError, TypeError, OverflowError):
-        return False
-    if not str(job.get("source_method", "")).strip(): return False
-    if any(term in title for term in NON_IAM_TITLE_TERMS): return False
+        reasons.append("invalid IAM relevance score")
+    if not str(job.get("source_method", "")).strip():
+        reasons.append("vacancy source not recorded")
+    if any(term in title for term in NON_IAM_TITLE_TERMS):
+        reasons.append("excluded non-IAM title")
     employment = str(job.get("employment_type", "") or "").strip().lower()
-    if any(term in employment for term in ("contract", "fixed-term", "temporary", "interim", "freelance")): return False
-    # Full-time describes hours, not contract duration. Require positive
-    # permanent/indefinite/regular employee status before notifying.
-    if not any(term in employment for term in ("permanent", "indefinite", "regular")): return False
+    if any(term in employment for term in ("contract", "fixed-term", "temporary", "interim", "freelance")):
+        reasons.append("non-permanent employment")
+    if not any(term in employment for term in ("permanent", "indefinite", "regular")):
+        reasons.append("permanent employment not evidenced")
     url = str(job.get("url") or job.get("canonical_url") or "").strip()
-    if not url: return False
-    # First discovery is not proof of a freshly advertised vacancy. Suppress
-    # known older postings while keeping them in the full audit/history.
+    if not url:
+        reasons.append("official vacancy URL missing")
     posted = str(job.get("date_posted", "") or "").strip()
-    # A new discovery is not a new advert. Do not email jobs whose original
-    # posting age cannot be verified (including blank or malformed dates).
-    if not posted: return False
-    try:
-        posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
-        if posted_at.tzinfo is None:
-            posted_at = posted_at.replace(tzinfo=timezone.utc)
-        age = datetime.now(timezone.utc) - posted_at
-        if age > timedelta(days=7) or age < -timedelta(days=1): return False
-    except (ValueError, OverflowError):
-        return False
+    if not posted:
+        reasons.append("original posting date missing")
+    else:
+        try:
+            posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
+            if posted_at.tzinfo is None:
+                posted_at = posted_at.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - posted_at
+            if age > timedelta(days=7) or age < -timedelta(days=1):
+                reasons.append("original posting date outside 7-day freshness window")
+        except (ValueError, OverflowError):
+            reasons.append("original posting date invalid")
     host = (urlparse(url).hostname or "").lower()
-    if any(host == d or host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS): return False
+    if any(host == d or host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS):
+        reasons.append("blocked job-board or aggregator URL")
     location = " " + str(job.get("location", "") or "").strip().lower() + " "
-    # Preserve legitimate multi-country adverts when they explicitly include a
-    # UK location, but suppress unmistakably foreign-only locations. This is a
-    # notification safety net; the Hunter remains responsible for classification.
     has_uk = any(term in location for term in UK_LOCATION_TERMS)
     has_foreign = any(term in location for term in CLEAR_FOREIGN_LOCATION_TERMS)
-    if has_foreign and not has_uk: return False
-    return True
+    if has_foreign and not has_uk:
+        reasons.append("foreign-only location")
+    return reasons
+
+
+def email_worthy(job: Dict[str, str]) -> bool:
+    return not email_rejection_reasons(job)
+
 
 def application_deadline_has_passed(body: str, today=None) -> bool:
     """Reject vacancies with an explicit, elapsed application closing date.
@@ -244,14 +259,34 @@ def send_report(api_key: str, payload: Dict[str,object]) -> str:
 
 def main() -> None:
     raw_jobs=read_jobs(RESULT_CSV)
-    jobs=deduplicate_email_jobs([job for job in raw_jobs if job.get("notification_status", "").strip().upper() == "NEW" and email_worthy(job)])
-    suppressed=len(raw_jobs)-len(jobs)
-    if suppressed: print(f"Suppressed {suppressed} non-eligible or duplicate notification candidate(s).")
+    eligible = []
+    for job in raw_jobs:
+        if job.get("notification_status", "").strip().upper() != "NEW":
+            continue
+        reasons = email_rejection_reasons(job)
+        if reasons:
+            print(
+                f"WITHHELD | {job.get('company', '')} | {job.get('title', '')} | "
+                f"{job.get('url') or job.get('canonical_url') or ''} | "
+                + "; ".join(reasons)
+            )
+        else:
+            eligible.append(job)
+    jobs=deduplicate_email_jobs(eligible)
+    if len(eligible) != len(jobs):
+        print(f"Deduplicated {len(eligible) - len(jobs)} verified notification candidate(s).")
     if not jobs:
         print("No email-worthy NEW IAM jobs this run. Email not sent."); return
-    checked = [job for job in jobs if live_application_page(job)]
-    if len(checked) != len(jobs):
-        print(f"Withheld {len(jobs) - len(checked)} job(s): live vacancy/application page could not be verified.")
+    checked = []
+    for job in jobs:
+        if live_application_page(job):
+            checked.append(job)
+        else:
+            print(
+                f"WITHHELD | {job.get('company', '')} | {job.get('title', '')} | "
+                f"{job.get('url') or job.get('canonical_url') or ''} | "
+                "live vacancy/application page not verified"
+            )
     jobs = checked
     if not jobs:
         print("No live, verified NEW IAM vacancies. Email not sent."); return
