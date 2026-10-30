@@ -184,6 +184,13 @@ jobs:
           same_ref = {**london, "job_reference": "REQ-123"}
           first_ref = {**base, "job_reference": "REQ-123"}
           assert len(deduplicate_email_jobs([first_ref, same_ref])) == 1
+          from uk_iam_hunter import GLOBAL_DISCOVERY_QUERIES
+          assert len(GLOBAL_DISCOVERY_QUERIES) == 30
+          assert any("Scotland" in q and "Glasgow" in q for q in GLOBAL_DISCOVERY_QUERIES[:12])
+          assert any("Wales" in q and "Belfast" in q for q in GLOBAL_DISCOVERY_QUERIES[:12])
+          assert any("Manchester" in q and "Leeds" in q for q in GLOBAL_DISCOVERY_QUERIES[:12])
+          assert any("Bristol" in q and "Newcastle" in q for q in GLOBAL_DISCOVERY_QUERIES[:12])
+          assert not any("(UK OR London)" in q or "(UK OR \\"United Kingdom\\" OR London)" in q for q in GLOBAL_DISCOVERY_QUERIES)
           from uk_iam_hunter import canonical_url
           a1 = canonical_url("https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247")
           a2 = canonical_url("https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104067")
@@ -272,7 +279,7 @@ jobs:
           IAM_COMPANY_SCAN_SECONDS: "75"
           USE_GLOBAL_DISCOVERY: "true"
           USE_SEARCH_DISCOVERY: "true"
-          GLOBAL_SEARCH_QUERY_LIMIT: "26"
+          GLOBAL_SEARCH_QUERY_LIMIT: "30"
           MAX_GLOBAL_CANDIDATES: "180"
           MAX_LISTING_LINKS: "80"
           IAM_RECENT_SEARCH_HINT: "posted this week"
