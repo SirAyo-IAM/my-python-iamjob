@@ -73,6 +73,9 @@ DIRECT_JOB_SEEDS = [
     "https://jobs.smartrecruiters.com/TheAA1/744000155022738-identity-access-manager",
 
 
+    # Independently verified 29 October 2026 permanent IAM vacancy.
+    "https://jobs.gold.ac.uk/vacancy.aspx?ref=060PS2026",  # Goldsmiths Identity Manager
+
     # User-reported October 2026 misses: all remain subject to live-page,
     # UK/permanent, IAM relevance and original-posting-date safeguards.
     "https://careers.tesco.com/en_GB/careers/JobDetail/218148",
@@ -120,6 +123,8 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:tmhcc.wd108.myworkdayjobs.com/External (CyberArk OR "Identity Systems" OR IAM) London',
     'site:bupa.wd3.myworkdayjobs.com/EXT_CAREER (CyberArk OR BeyondTrust OR "IAM Lead Engineer")',
     'site:jobs.smartrecruiters.com/TheAA1 ("Identity & Access" OR IAM OR PAM)',
+
+    'site:jobs.gold.ac.uk/vacancy.aspx ("Identity Manager" OR IAM OR "Identity and Access")',
 
     # Official employer/ATS sweeps for four confirmed discovery blind spots.
     'site:careers.tesco.com/en_GB/careers/JobDetail (IAM OR "Identity and Access" OR "Access Management")',
