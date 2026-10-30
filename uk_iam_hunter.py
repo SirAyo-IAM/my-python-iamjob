@@ -1279,6 +1279,12 @@ def canonical_url(url: str) -> str:
 
     try:
         parsed = urlparse(url)
+        # Goldsmiths' official vacancy pages identify individual jobs using
+        # ?ref=060PS2026 or ?id=123. Dropping these would collapse unrelated
+        # requisitions to one /vacancy.aspx URL. Do not preserve generic ref/id
+        # parameters on other domains, where they often track referrals.
+        if (parsed.hostname or "").lower() == "jobs.gold.ac.uk" and parsed.path.lower().rstrip("/") == "/vacancy.aspx":
+            keep_params = keep_params | {"ref", "id"}
         kept = [
             (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
             if k.lower() in keep_params
@@ -6160,6 +6166,25 @@ def run_self_test() -> None:
         print("FAIL | Qube gh_jid canonicalisation")
     else:
         print("PASS | Qube gh_jid canonicalisation")
+
+    # Goldsmiths advert IDs must survive canonicalisation without making
+    # unrelated referral parameters part of other employers' job identities.
+    gold_ref_1 = canonical_url("https://jobs.gold.ac.uk/vacancy.aspx?ref=060PS2026&utm_source=search")
+    gold_ref_2 = canonical_url("https://jobs.gold.ac.uk/Vacancy.aspx?ref=061PS2026")
+    gold_id_1 = canonical_url("https://jobs.gold.ac.uk/Vacancy.aspx?forced=1&id=98")
+    gold_id_2 = canonical_url("https://jobs.gold.ac.uk/Vacancy.aspx?forced=1&id=99")
+    other_ref = canonical_url("https://example.com/jobs/iam?ref=tracking&utm_source=search")
+    goldsmiths_ok = (
+        gold_ref_1 != gold_ref_2
+        and "ref=060PS2026" in gold_ref_1
+        and "utm_source" not in gold_ref_1
+        and gold_id_1 != gold_id_2
+        and "id=98" in gold_id_1
+        and other_ref == "https://example.com/jobs/iam"
+    )
+    print(f"{'PASS' if goldsmiths_ok else 'FAIL'} | Goldsmiths vacancy ID canonicalisation")
+    if not goldsmiths_ok:
+        failures.append("Goldsmiths vacancy ID canonicalisation")
 
     # Direct discovery must include multiple Barclays search routes rather than
     # relying on the literal IAM acronym alone.
