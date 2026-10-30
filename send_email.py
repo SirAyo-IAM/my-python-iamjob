@@ -33,7 +33,6 @@ BLOCKED_EMAIL_DOMAINS = {
 NON_IAM_TITLE_TERMS = (
     "product marketing", "marketing manager", "sales engineer",
     "customer success manager", "cloud operations engineer",
-    "security engineering manager",  # Broad DevSecOps leadership is not an IAM vacancy.
     "cyber security jobs", "technology jobs", "create job alerts",
 )
 UK_LOCATION_TERMS = (
@@ -79,7 +78,14 @@ def email_rejection_reasons(job: Dict[str, str]) -> List[str]:
         reasons.append("invalid IAM relevance score")
     if not str(job.get("source_method", "")).strip():
         reasons.append("vacancy source not recorded")
-    if any(term in title for term in NON_IAM_TITLE_TERMS):
+    generic_security_manager = (
+        "security engineering manager" in title
+        and not any(signal in title for signal in (
+            "identity", "iam", "privileged", "access", "pam",
+            "sailpoint", "okta", "cyberark",
+        ))
+    )
+    if any(term in title for term in NON_IAM_TITLE_TERMS) or generic_security_manager:
         reasons.append("excluded non-IAM title")
     employment = str(job.get("employment_type", "") or "").strip().lower()
     if any(term in employment for term in ("contract", "fixed-term", "temporary", "interim", "freelance")):
