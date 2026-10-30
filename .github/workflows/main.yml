@@ -258,6 +258,8 @@ jobs:
           assert email_rejection_reasons(base) == []
           assert "permanent employment not evidenced" in email_rejection_reasons({**base, "employment_type": "Full-time"})
           assert "non-permanent employment" in email_rejection_reasons({**base, "employment_type": "Contract"})
+          assert "excluded non-IAM title" in email_rejection_reasons({**base, "title": "Senior Security Engineering Manager"})
+          assert "excluded non-IAM title" not in email_rejection_reasons({**base, "title": "Identity and Access Management Lead"})
           assert "original posting date missing" in email_rejection_reasons({**base, "date_posted": ""})
           assert "substantive job description not verified" in email_rejection_reasons({**base, "description_verified": "NO"})
           assert "UK job location not confirmed" in email_rejection_reasons({**base, "location_status": "UK UNKNOWN"})
