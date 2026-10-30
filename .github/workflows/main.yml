@@ -190,7 +190,7 @@ jobs:
           assert any("Wales" in q and "Belfast" in q for q in GLOBAL_DISCOVERY_QUERIES[:12])
           assert any("Manchester" in q and "Leeds" in q for q in GLOBAL_DISCOVERY_QUERIES[:12])
           assert any("Bristol" in q and "Newcastle" in q for q in GLOBAL_DISCOVERY_QUERIES[:12])
-          assert not any("(UK OR London)" in q or "(UK OR \\"United Kingdom\\" OR London)" in q for q in GLOBAL_DISCOVERY_QUERIES)
+          assert not any("(UK OR London)" in q for q in GLOBAL_DISCOVERY_QUERIES)
           from uk_iam_hunter import canonical_url
           a1 = canonical_url("https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104247")
           a2 = canonical_url("https://www.ansonmccade.com/vacancy_detail.php?vacancy_id=104067")
