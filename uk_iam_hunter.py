@@ -5240,6 +5240,11 @@ def classify_new_jobs(
         )
     }
 
+    # Keep vacancies with incomplete email evidence eligible for a later NEW
+    # alert if their missing metadata is subsequently verified. Do not loosen
+    # any permanent-only, UK, relevance or publication-date email safeguards.
+    from send_email import email_rejection_reasons
+
     enriched: List[Dict[str, Any]] = []
     notify: List[Dict[str, Any]] = []
 
@@ -5259,6 +5264,10 @@ def classify_new_jobs(
         existing = jobs_state.get(
             state_id
         )
+        was_pending = isinstance(existing, dict) and bool(
+            existing.get("notification_pending", False)
+        )
+        email_eligible = not email_rejection_reasons(job)
 
         if not isinstance(
             existing,
@@ -5283,7 +5292,12 @@ def classify_new_jobs(
                 )
             )
 
-            if (
+            if was_pending and email_eligible:
+                # This role was discovered earlier but was withheld because
+                # evidence was incomplete. It has never been email-eligible.
+                notification_status = "NEW"
+                new_count += 1
+            elif (
                 previous_signature
                 and previous_signature != signature
             ):
@@ -5304,6 +5318,14 @@ def classify_new_jobs(
             "first_seen": first_seen,
             "last_seen": now_iso,
             "signature": signature,
+            # Only newly withheld records (or records already pending) may
+            # transition to NEW when static email evidence becomes complete.
+            # Historical state without this flag remains untouched to avoid
+            # resending vacancies previously emailed before this migration.
+            "notification_pending": (
+                not email_eligible
+                and (not isinstance(existing, dict) or was_pending)
+            ),
             "company": job.get(
                 "company",
                 "",
@@ -6314,7 +6336,8 @@ def run_self_test() -> None:
             "working_arrangement": "Hybrid",
             "employment_type": "Permanent",
             "salary": "£70,000 per annum",
-            "date_posted": "2026-09-03",
+            "date_posted": datetime.now(timezone.utc).date().isoformat(),
+            "description_verified": "YES",
             "job_reference": "IAM-100",
             "match_type": "CORE IAM",
             "match_score": 150,
@@ -6365,6 +6388,35 @@ def run_self_test() -> None:
             failures.append(
                 "persistent seen-job state"
             )
+
+        # An incomplete permanent-status field must not permanently consume
+        # a vacancy. It can become NEW once verified, but not repeat after.
+        pending_job = {
+            **sample_job,
+            "job_reference": "IAM-200",
+            "url": "https://examplebank.test/jobs/iam-200",
+            "canonical_url": "https://examplebank.test/jobs/iam-200",
+            "employment_type": "Full-time",
+        }
+        pending_first, _, _ = classify_new_jobs([pending_job])
+        pending_second, _, _ = classify_new_jobs([pending_job])
+        pending_state = load_seen_state()["jobs"][job_state_identity(pending_job)]
+        verified_job = {**pending_job, "employment_type": "Permanent"}
+        pending_third, third_notifications, _ = classify_new_jobs([verified_job])
+        pending_fourth, fourth_notifications, _ = classify_new_jobs([verified_job])
+        pending_ok = (
+            pending_first[0]["notification_status"] == "NEW"
+            and pending_second[0]["notification_status"] == "SEEN"
+            and pending_state.get("notification_pending") is True
+            and pending_third[0]["notification_status"] == "NEW"
+            and len(third_notifications) == 1
+            and pending_fourth[0]["notification_status"] == "SEEN"
+            and not fourth_notifications
+            and load_seen_state()["jobs"][job_state_identity(verified_job)].get("notification_pending") is False
+        )
+        print(f"{'PASS' if pending_ok else 'FAIL'} | withheld vacancy becomes NEW only after permanent evidence is verified")
+        if not pending_ok:
+            failures.append("withheld vacancy pending notification state")
 
     globals()["STATE_DIR"] = original_state_dir
     globals()["SEEN_STATE_FILE"] = original_state_file
