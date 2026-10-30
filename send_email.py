@@ -33,6 +33,7 @@ BLOCKED_EMAIL_DOMAINS = {
 NON_IAM_TITLE_TERMS = (
     "product marketing", "marketing manager", "sales engineer",
     "customer success manager", "cloud operations engineer",
+    "security engineering manager",  # Broad DevSecOps leadership is not an IAM vacancy.
     "cyber security jobs", "technology jobs", "create job alerts",
 )
 UK_LOCATION_TERMS = (
