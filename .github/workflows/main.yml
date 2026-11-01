@@ -135,6 +135,8 @@ jobs:
           # These are candidate inputs, not automatic emails: the live UK,
           # permanent, original-date and relevance filters still apply.
           from iam_priority_discovery import DIRECT_JOB_SEEDS, PRIORITY_OFFICIAL_QUERIES, recover_tesco_employment_type
+          assert any("/sites/CX_1001/job/15746" in url for url in DIRECT_JOB_SEEDS)
+          assert any("hcmn.fa.ap1.oraclecloud.com" in query for query in PRIORITY_OFFICIAL_QUERIES)
           for fragment in (
               "/JobDetail/218148",
               "/ebury/jobs/4922605101",
