@@ -89,6 +89,8 @@ DIRECT_JOB_SEEDS = [
     "https://cgi.njoyn.com/corp/xweb/xweb.asp?clid=21001&page=jobdetails&jobid=J0526-1965&BRID=1304115&SBDID=943&lang=1",
     "https://www.fruitiongroup.com/job/iam-platform-manager-2035/",
     "https://fa-evdq-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/11708",
+    # User-reported 1 Nov Oracle CX_1001 miss; do not assume the role qualifies.
+    "https://hcmn.fa.ap1.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/15746",
 ]
 
 
@@ -136,6 +138,7 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:nccgroup.pinpointhq.com/postings (IAM OR "Identity Governance" OR CyberArk)',
     'site:cgi.njoyn.com (IAM OR SailPoint OR CyberArk OR "Identity and Access")',
     'site:oraclecloud.com/hcmUI/CandidateExperience (IAM OR "Identity and Access Management" OR SailPoint OR CyberArk) "United Kingdom"',
+    'site:hcmn.fa.ap1.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job (IAM OR identity OR CyberArk OR SailPoint OR Entra)',
     'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security" OR "Privileged Access")',
     'site:jobs.lloydsbankinggroup.com (IAM OR "Identity and Access" OR SailPoint OR CyberArk)',
     'site:careers.ey.com/ey/job (IAM OR "Identity and Access Management" OR "Identity Security") "London"',
@@ -331,6 +334,8 @@ def discover() -> List[Dict[str, Any]]:
                 url,
                 method="V5.4 priority official discovery",
             )
+            if "/sites/CX_1001/job/15746" in url and not extracted:
+                print("DISCOVERY MISS | Oracle CX_1001 / job 15746: no verified IAM result; investigate page retrieval, description, UK location and permanent evidence")
             if hunter.host(url) == "job-boards.eu.greenhouse.io" and "/mangroup/jobs/" in url.lower():
                 for job in extracted:
                     job["company"] = "Man Group"
