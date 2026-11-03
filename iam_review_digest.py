@@ -134,25 +134,35 @@ def build_html(verified, review, reasons, audit_rejections, daily=False):
         f"<li>{esc(reason)}: {count}</li>"
         for reason, count in reasons.most_common(10)
     ) or "<li>No recorded eligibility failures.</li>"
+    heading = (
+        "<h2>UK IAM Hunter — Daily Needs Manual Check</h2>" if daily
+        else "<h2>UK IAM Hunter — Weekly Discovery & Review</h2>"
+    )
+    intro = (
+        "<p><strong>Daily unverified job review, not a verified vacancy alert.</strong> "
+        if daily
+        else "<p><strong>Weekly status digest, not a new-vacancy alert.</strong> "
+    )
+    verified_section = (
+        "" if daily else
+        "<h3>Verified Matches (current evidence; may already have been emailed)</h3>"
+        + section(verified, False)
+    )
     return (
         "<html><body style='font-family:Arial,sans-serif;max-width:820px'>"
-        ("<h2>UK IAM Hunter — Daily Needs Manual Check</h2>" if daily else
-         "<h2>UK IAM Hunter — Weekly Discovery & Review</h2>")
-        ("<p><strong>Daily unverified job review, not a verified vacancy alert.</strong> " if daily
-         else "<p><strong>Weekly status digest, not a new-vacancy alert.</strong> ")
-        "A listing under Needs Manual Check is NOT confirmed permanent, current, "
-        "or application-open. Check the official employer vacancy before applying.</p>"
-        f"<p>Current audit: {len(verified)} displayed verified matches; "
-        f"{len(review)} displayed unverified matches; {audit_rejections} source-level rejections.</p>"
-        + ("" if daily else "<h3>Verified Matches (current evidence; may already have been emailed)</h3>"
-           + section(verified, False))
+        + heading + intro
+        + "A listing under Needs Manual Check is NOT confirmed permanent, current, "
+        + "or application-open. Check the official employer vacancy before applying.</p>"
+        + f"<p>Current audit: {len(verified)} displayed verified matches; "
+        + f"{len(review)} displayed unverified matches; {audit_rejections} source-level rejections.</p>"
+        + verified_section
         + "<h3>Needs Manual Check (unverified — never included in verified alerts)</h3>"
         + section(review, True)
         + "<h3>Verification failure counts across current results</h3><ul>"
         + stats + "</ul>"
-        "<p>Counts describe the current scan, not the whole UK job market. "
-        "A vacancy may have more than one reason for rejection.</p>"
-        "</body></html>"
+        + "<p>Counts describe the current scan, not the whole UK job market. "
+        + "A vacancy may have more than one reason for rejection.</p>"
+        + "</body></html>"
     )
 
 
