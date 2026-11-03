@@ -119,8 +119,17 @@ def email_rejection_reasons(job: Dict[str, str]) -> List[str]:
             if posted_at.tzinfo is None:
                 posted_at = posted_at.replace(tzinfo=timezone.utc)
             age = datetime.now(timezone.utc) - posted_at
-            if age > timedelta(days=7) or age < -timedelta(days=1):
-                reasons.append("original posting date outside 7-day freshness window")
+            # An employer-verified approaching closing date keeps a newly
+            # discovered role actionable even if it was originally posted more
+            # than seven days ago. Prevent the exception reviving stale jobs
+            # older than 45 days, and never infer a repost from updates.
+            actionable_with_deadline = (
+                verified_upcoming_deadline(job) and age <= timedelta(days=45)
+            )
+            if age < -timedelta(days=1) or (
+                age > timedelta(days=7) and not actionable_with_deadline
+            ):
+                reasons.append("original posting date outside freshness window")
         except (ValueError, OverflowError):
             reasons.append("original posting date invalid")
     host = (urlparse(url).hostname or "").lower()
