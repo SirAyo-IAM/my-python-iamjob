@@ -94,6 +94,17 @@ DIRECT_JOB_SEEDS = [
     # Independent official-employer finds on 3 Nov. Check live/fresh evidence before alert.
     "https://careers.postoffice.co.uk/join-us/search-our-jobs/M365-Engineer-19016",
     "https://careers.postoffice.co.uk/join-us/search-our-jobs/Customer-Identity-Product-Owner-19155",
+    # User-reported 3 November misses: discovery inputs, NEVER pre-approved alerts.
+    "https://careers.sky.com/jobs/t-R0058030",
+    "https://fsp.bamboohr.com/careers/257",
+    "https://careers.nttdata.com/global/en/job/NTT1GLOBALR149580EXTERNALENGLOBAL/IDAM-PAM-Engineer",
+    "https://careers-kingfisher2.icims.com/jobs/160095/identity-governance-platform-engineer/job",
+    "https://hcnq.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/1072345",
+    "https://apply.workable.com/methods/j/1E9DDCD92B/",
+    "https://manmetjobs.mmu.ac.uk/jobs/vacancy/senior-identity--access-engineer--9639-manchester-all-saints-campus/9535/description/",
+    "https://jobs.ashbyhq.com/eb485598-6bf3-40a5-8560-d70150131305/2ab50e7b-1179-45bd-b249-d959e65a7209",
+    "https://careers.fitch.group/job/Manchester-Associate-Director%2C-Identity-Governance-and-Administration-%28Manchester%29/1437240133/",
+
 ]
 
 
@@ -142,6 +153,20 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:cgi.njoyn.com (IAM OR SailPoint OR CyberArk OR "Identity and Access")',
     'site:oraclecloud.com/hcmUI/CandidateExperience (IAM OR "Identity and Access Management" OR SailPoint OR CyberArk) "United Kingdom"',
     'site:hcmn.fa.ap1.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job (IAM OR identity OR CyberArk OR SailPoint OR Entra)',
+    # Domain sweeps capture new requisitions rather than only the submitted URLs.
+    'site:careers.sky.com/jobs/ (authentication services OR identity OR IAM OR Entra)',
+    'site:fsp.bamboohr.com/careers (identity OR security engineer OR PKI OR Entra)',
+    'site:careers.nttdata.com/global/en/job (IDAM OR PAM OR identity OR cyberark)',
+    'site:careers-kingfisher2.icims.com/jobs (identity governance OR IAM OR MIM)',
+    'site:careers.kingfisher.com (identity governance OR access management)',
+    'site:hcnq.fa.em2.oraclecloud.com/hcmUI/CandidateExperience (identity OR IDAM OR SailPoint OR PAM)',
+    'site:apply.workable.com/methods/j (IAM OR identity OR privileged)',
+    'site:manmetjobs.mmu.ac.uk/jobs/vacancy (identity OR access OR IDAM)',
+    'site:jobs.ashbyhq.com (identity OR SSO OR PAM) (UK OR London OR Edinburgh)',
+    'site:careers.fitch.group/job (identity governance OR SailPoint OR IGA)',
+    'site:civilservicejobs.service.gov.uk (identity OR IAM OR PAM OR Entra OR SailPoint)',
+    '"2015614" "Civil Service" identity OR IAM OR security',
+
     'site:careers.postoffice.co.uk/join-us/search-our-jobs (identity OR IAM OR Entra OR SSO OR CyberArk)',
     'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security" OR "Privileged Access")',
     'site:jobs.lloydsbankinggroup.com (IAM OR "Identity and Access" OR SailPoint OR CyberArk)',
