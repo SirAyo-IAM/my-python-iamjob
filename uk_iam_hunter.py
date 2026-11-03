@@ -566,6 +566,7 @@ DIRECT_DISCOVERY_SEEDS = [
     ("Odevo jobs", "https://career.odevo.com/jobs"),
     ("Marex Breezy", "https://marex.breezy.hr/"),
     ("Nomura UK careers", "https://careers.nomura.com/Nomura/"),
+    ("Post Office UK careers", "https://careers.postoffice.co.uk/join-us/search-our-jobs/"),
     # Recruiter site confirmed to link directly to IAM vacancy_id requisitions.
     ("Anson McCade change vacancies", "https://www.ansonmccade.com/sector_change_and_transformation.php"),
     ("Anson McCade cyber vacancies", "https://www.ansonmccade.com/sector_information_technology.php"),
