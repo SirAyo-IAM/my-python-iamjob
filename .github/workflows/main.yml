@@ -147,6 +147,39 @@ jobs:
           # permanent, original-date and relevance filters still apply.
           from iam_priority_discovery import DIRECT_JOB_SEEDS, PRIORITY_OFFICIAL_QUERIES, recover_tesco_employment_type
           assert any("/sites/CX_1001/job/15746" in url for url in DIRECT_JOB_SEEDS)
+          # Real employer regression set supplied on 3 November. These seeds
+          # are discoverable even when not email-eligible.
+          for fragment in (
+              "/t-R0058030", "fsp.bamboohr.com/careers/257",
+              "NTT1GLOBALR149580EXTERNALENGLOBAL",
+              "/jobs/160095/", "/job/1072345",
+              "/methods/j/1E9DDCD92B/", "9639-manchester",
+              "2ab50e7b-1179-45bd-b249-d959e65a7209",
+              "1437240133",
+          ):
+              assert any(fragment in url for url in DIRECT_JOB_SEEDS), fragment
+          assert any("civilservicejobs.service.gov.uk" in q for q in PRIORITY_OFFICIAL_QUERIES)
+          assert any("careers.fitch.group" in q for q in PRIORITY_OFFICIAL_QUERIES)
+          from uk_iam_hunter import is_target_job
+          accepted, _, _, _, _ = is_target_job(
+              "Authentication Services Technical Specialist",
+              "Maintain authentication infrastructure including Entra ID, Active Directory, "
+              "SSO, federation and identity lifecycle controls for UK colleagues.",
+              "London, United Kingdom", "https://careers.sky.com/jobs/t-R0058030",
+              "Permanent",
+          )
+          assert accepted
+          pending_pipeline, _, _, _, explanation = is_target_job(
+              "IDAM & PAM Engineer",
+              "This advertisement is intended to identify and engage candidates "
+              "in advance of specific vacancies becoming available. SailPoint, CyberArk.",
+              "London, United Kingdom",
+              "https://careers.nttdata.com/global/en/job/NTT1GLOBALR149580EXTERNALENGLOBAL/IDAM-PAM-Engineer",
+              "Permanent",
+          )
+          assert not pending_pipeline and "future talent pipeline" in explanation
+          print("PASS | nine missed ATS vacancies, Civil Service discovery and future-pipeline withholding")
+
           assert any("hcmn.fa.ap1.oraclecloud.com" in query for query in PRIORITY_OFFICIAL_QUERIES)
           for fragment in (
               "/JobDetail/218148",
