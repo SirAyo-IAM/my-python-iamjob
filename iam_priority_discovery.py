@@ -91,6 +91,9 @@ DIRECT_JOB_SEEDS = [
     "https://fa-evdq-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001/job/11708",
     # User-reported 1 Nov Oracle CX_1001 miss; do not assume the role qualifies.
     "https://hcmn.fa.ap1.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/15746",
+    # Independent official-employer finds on 3 Nov. Check live/fresh evidence before alert.
+    "https://careers.postoffice.co.uk/join-us/search-our-jobs/M365-Engineer-19016",
+    "https://careers.postoffice.co.uk/join-us/search-our-jobs/Customer-Identity-Product-Owner-19155",
 ]
 
 
@@ -139,6 +142,7 @@ PRIORITY_OFFICIAL_QUERIES = [
     'site:cgi.njoyn.com (IAM OR SailPoint OR CyberArk OR "Identity and Access")',
     'site:oraclecloud.com/hcmUI/CandidateExperience (IAM OR "Identity and Access Management" OR SailPoint OR CyberArk) "United Kingdom"',
     'site:hcmn.fa.ap1.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job (IAM OR identity OR CyberArk OR SailPoint OR Entra)',
+    'site:careers.postoffice.co.uk/join-us/search-our-jobs (identity OR IAM OR Entra OR SSO OR CyberArk)',
     'site:lloydsbankinggroup.com/careers (IAM OR "Identity and Access" OR "Identity Security" OR "Privileged Access")',
     'site:jobs.lloydsbankinggroup.com (IAM OR "Identity and Access" OR SailPoint OR CyberArk)',
     'site:careers.ey.com/ey/job (IAM OR "Identity and Access Management" OR "Identity Security") "London"',
