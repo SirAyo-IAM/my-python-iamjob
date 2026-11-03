@@ -3574,6 +3574,41 @@ def discover_candidate_links_from_listing(url: str) -> List[str]:
     return [url for _, url in ranked[:MAX_LISTING_LINKS]]
 
 
+def balanced_candidate_urls(
+    listing_links: List[str],
+    query_groups: List[List[str]],
+    limit: int,
+) -> List[str]:
+    """Reserve slots for direct employer listings, then interleave all searches.
+
+    Previously the first several search queries consumed the global 180-URL
+    budget, so later regions and IAM specialisms might never be fetched.
+    """
+    if limit <= 0:
+        return []
+    selected: List[str] = []
+    seen: Set[str] = set()
+
+    def add(url: str) -> None:
+        key = canonical_url(url)
+        if key and key not in seen and len(selected) < limit:
+            seen.add(key)
+            selected.append(url)
+
+    reserved = max(12, limit // 3)
+    for url in listing_links[:reserved]:
+        add(url)
+    pools = [listing_links[reserved:]] + list(query_groups)
+    depth = max((len(pool) for pool in pools), default=0)
+    for offset in range(depth):
+        for pool in pools:
+            if offset < len(pool):
+                add(pool[offset])
+            if len(selected) >= limit:
+                return selected
+    return selected
+
+
 def global_discovery() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Open-ended discovery independent of the predefined company list."""
     audit: Dict[str, Any] = {
@@ -3594,7 +3629,8 @@ def global_discovery() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     }
 
     session = make_session()
-    discovered: List[str] = []
+    discovered: List[str] = []  # Direct employer listing links.
+    search_groups: List[List[str]] = []  # Independent pools per search family.
     listing_urls: List[str] = []
 
     for _, seed in DIRECT_DISCOVERY_SEEDS:
@@ -3619,6 +3655,7 @@ def global_discovery() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                 audit["errors"] += 1
                 found = []
 
+            per_query: List[str] = []
             for candidate in found:
                 candidate = normalise_url(candidate)
                 if not looks_like_official_job_candidate(candidate):
@@ -3626,7 +3663,8 @@ def global_discovery() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                 if looks_like_listing_url(candidate):
                     listing_urls.append(candidate)
                 else:
-                    discovered.append(candidate)
+                    per_query.append(candidate)
+            search_groups.append(per_query)
 
     listing_urls = list(dict.fromkeys(listing_urls))
     audit["listings"] = len(listing_urls)
@@ -3639,19 +3677,13 @@ def global_discovery() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         except Exception:
             audit["errors"] += 1
 
-    # Include direct individual URLs returned by engines and listing-derived URLs.
-    unique_candidates: List[str] = []
-    seen: Set[str] = set()
-    for candidate in discovered:
-        key = canonical_url(candidate)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        unique_candidates.append(candidate)
-        if len(unique_candidates) >= MAX_GLOBAL_CANDIDATES:
-            break
+    # Give each search family a share of the verification budget, while
+    # retaining a reserved share for employer listing and ATS discoveries.
+    unique_candidates = balanced_candidate_urls(
+        discovered, search_groups, MAX_GLOBAL_CANDIDATES
+    )
 
-    audit["search_urls"] = len(discovered)
+    audit["search_urls"] = len(discovered) + sum(len(group) for group in search_groups)
     audit["candidate_urls"] = len(unique_candidates)
     audit["job_links"] = len(unique_candidates)
 
