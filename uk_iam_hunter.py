@@ -5329,8 +5329,15 @@ def classify_new_jobs(
             # Historical state without this flag remains untouched to avoid
             # resending vacancies previously emailed before this migration.
             "notification_pending": (
-                not email_eligible
-                and (not isinstance(existing, dict) or was_pending)
+                # A qualifying NEW role must stay pending until Brevo confirms
+                # delivery, not merely until the crawler writes the CSV.
+                # Otherwise a temporary blocked live-page check permanently
+                # suppresses a genuinely new vacancy on the following run.
+                (notification_status == "NEW")
+                or (
+                    not email_eligible
+                    and (not isinstance(existing, dict) or was_pending)
+                )
             ),
             "company": job.get(
                 "company",
