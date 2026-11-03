@@ -12,13 +12,21 @@ on:
       - "send_email.py"
       - ".github/workflows/main.yml"
 
+  # GitHub's scheduler is best-effort; non-zero minutes reduce peak-hour
+  # congestion. Morning and afternoon runs act as missed-noon fallbacks.
+  # Persistent sent-state prevents duplicate vacancy emails.
   schedule:
-    - cron: "0 12 * * *"
+    - cron: "17 9 * * *"
+      timezone: "Europe/London"
+    - cron: "17 12 * * *"
+      timezone: "Europe/London"
+    - cron: "37 16 * * *"
       timezone: "Europe/London"
 
 concurrency:
-  group: uk-iam-hunter-main
-  cancel-in-progress: true
+  # Pushing a code change must not cancel a scheduled email-producing scan.
+  group: uk-iam-hunter-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   run-python:
@@ -279,6 +287,44 @@ jobs:
                   assert not subsequent and after[0]["notification_status"] == "SEEN"
               finally:
                   hunter.SEEN_STATE_FILE = original_state_file
+          # Regression: a new official role with an imminent, labelled
+          # closing date is actionable even when its posting date is absent.
+          from uk_iam_hunter import extract_closing_date, extract_results_from_candidate
+          from datetime import date
+          from unittest.mock import patch as synthetic_patch
+          closing = datetime.now(timezone.utc).date() + timedelta(days=12)
+          closing_label = f"Closing Date: {closing.strftime('%A')} {closing.day} {closing.strftime('%B')} {closing.year}"
+          assert extract_closing_date(closing_label)[0] == closing.isoformat()
+          assert extract_closing_date("Date posted: 03 November 2026")[0] == ""
+          postoffice_url = "https://careers.postoffice.co.uk/join-us/search-our-jobs/Customer-Identity-Product-Owner-19155"
+          postoffice_html = (
+              "<html><head><title>Customer Identity Product Owner</title></head>"
+              "<header><div>Location: Wood Street</div>Navigation, footer</header>"
+              "<h1>Customer Identity Product Owner</h1>"
+              f"<main>Summary Salary: Competitive Contract Type: Permanent Working pattern: Full Time Location: London {closing_label} "
+              "What to expect Identity and access management responsibilities include IAM governance, customer authentication and "
+              "SSO, access certifications and maintaining product backlogs for identity capabilities across enterprise applications. "
+              "The role requires experience working with engineers and implementing access controls, identity lifecycle processes, "
+              "requirements management and organisational security policies. Apply Now "
+              "Application Guidance: Site navigation</main></html>"
+          )
+          with synthetic_patch("uk_iam_hunter.fetch_candidate_page", return_value=(postoffice_html, postoffice_url)):
+              postoffice = extract_results_from_candidate(postoffice_url, "test")
+          assert len(postoffice) == 1, postoffice
+          assert postoffice[0]["company"] == "Post Office Ltd"
+          assert postoffice[0]["location"] == "London", postoffice[0]["location"]
+          assert postoffice[0]["employment_type"] == "Permanent"
+          assert postoffice[0]["closing_date"] == closing.isoformat()
+          assert postoffice[0]["description_verified"] == "YES"
+          from send_email import verified_upcoming_deadline
+          assert verified_upcoming_deadline({**base, "closing_date": closing.isoformat()})
+          assert "original posting date missing and no verified upcoming closing date" not in email_rejection_reasons({
+              **base, "date_posted": "", "closing_date": closing.isoformat()
+          })
+          assert "original posting date missing and no verified upcoming closing date" in email_rejection_reasons({
+              **base, "date_posted": "", "closing_date": ""
+          })
+          print("PASS | official role-specific location, closing-date and missing-post-date safeguard")
           from send_email import email_rejection_reasons
           assert email_rejection_reasons(base) == []
           assert "permanent employment not evidenced" in email_rejection_reasons({**base, "employment_type": "Full-time"})
@@ -411,6 +457,12 @@ jobs:
             .iam_state/seen_jobs.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Audit withheld and email-eligible vacancies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python send_email.py --audit-only
 
       - name: Send NEW jobs email
         if: github.event_name != 'push'
