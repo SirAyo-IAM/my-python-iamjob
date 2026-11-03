@@ -132,7 +132,7 @@ def build_html(verified, review, reasons, audit_rejections, daily=False):
         return "".join(parts) + "</ul>"
     stats = "".join(
         f"<li>{esc(reason)}: {count}</li>"
-        for reason, count in reasons.most_common(10)
+        for reason, count in Counter(reasons).most_common(10)
     ) or "<li>No recorded eligibility failures.</li>"
     heading = (
         "<h2>UK IAM Hunter — Daily Needs Manual Check</h2>" if daily
