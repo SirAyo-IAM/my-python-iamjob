@@ -10,6 +10,8 @@ on:
       - "uk_iam_hunter.py"
       - "iam_priority_discovery.py"
       - "send_email.py"
+      - "iam_review_digest.py"
+      - "iam_state_reconcile.py"
       - ".github/workflows/main.yml"
 
   # GitHub's scheduler is best-effort; non-zero minutes reduce peak-hour
@@ -21,6 +23,9 @@ on:
     - cron: "17 12 * * *"
       timezone: "Europe/London"
     - cron: "37 16 * * *"
+      timezone: "Europe/London"
+    # Weekly transparency digest even if no fresh verified vacancies qualify.
+    - cron: "43 17 * * 0"
       timezone: "Europe/London"
 
 concurrency:
@@ -59,6 +64,9 @@ jobs:
             echo "ERROR: iam_priority_discovery.py was not found."
             exit 1
           }
+
+          test -f iam_review_digest.py || { echo "Missing review digest"; exit 1; }
+          test -f iam_state_reconcile.py || { echo "Missing state reconciler"; exit 1; }
 
           test -f send_email.py || {
             echo "ERROR: send_email.py was not found."
@@ -122,6 +130,8 @@ jobs:
           python -m py_compile uk_iam_hunter.py
           python -m py_compile iam_priority_discovery.py
           python -m py_compile send_email.py
+          python -m py_compile iam_review_digest.py
+          python -m py_compile iam_state_reconcile.py
 
           python - <<'PY'
           import requests
@@ -321,6 +331,33 @@ jobs:
               finally:
                   hunter.SEEN_STATE_FILE = original_state_file
           from send_email import email_rejection_reasons
+          from iam_review_digest import review_candidate, generate_digest
+          from iam_state_reconcile import repair as repair_historical
+          # Unverified review entries cannot be treated as confirmed vacancies.
+          uncertain = {
+              **base, "date_posted": "", "employment_type": "Full-time",
+              "first_seen": datetime.now(timezone.utc).isoformat(),
+          }
+          assert review_candidate(uncertain, email_rejection_reasons(uncertain))
+          v, m, reasons, _ = generate_digest([uncertain])
+          assert not v and len(m) == 1 and reasons["permanent employment not evidenced"] == 1
+          assert not review_candidate({**uncertain, "location_status": "UK UNKNOWN"},
+                                      email_rejection_reasons(uncertain))
+          # The 23 Oct-2 Nov repair must not re-arm already-eligible jobs.
+          from uk_iam_hunter import job_state_identity
+          old_job = {**uncertain, "first_seen": "2026-10-27T08:00:00+00:00"}
+          identity = job_state_identity(old_job)
+          sample_state = {"jobs": {identity: {
+              "first_seen": old_job["first_seen"], "notification_pending": False
+          }}}
+          reopened, _ = repair_historical(sample_state, [old_job])
+          assert reopened == [identity] and sample_state["jobs"][identity]["notification_pending"]
+          sample_state["jobs"][identity]["notification_pending"] = False
+          already_eligible = {**old_job, "employment_type": "Permanent",
+                              "date_posted": datetime.now(timezone.utc).isoformat()}
+          reopened, _ = repair_historical(sample_state, [already_eligible])
+          assert not reopened
+          print("PASS | separate review tier and conservative historic state repair")
           # Regression: a new official role with an imminent, labelled
           # closing date is actionable even when its posting date is absent.
           from uk_iam_hunter import balanced_candidate_urls
@@ -504,6 +541,12 @@ jobs:
           print("Remembered jobs:", len(state.get("jobs", {})))
           PY
 
+      - name: Safely reopen incident-window unverified records
+        shell: bash
+        run: |
+          set -euo pipefail
+          python iam_state_reconcile.py
+
       - name: Upload job results
         uses: actions/upload-artifact@v4
         with:
@@ -524,6 +567,23 @@ jobs:
         run: |
           set -euo pipefail
           python send_email.py --audit-only
+
+      - name: Build weekly manual-review digest audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python iam_review_digest.py --audit-only
+
+      - name: Send weekly verified and needs-review status digest
+        if: github.event_name == 'schedule' && github.event.schedule == '43 17 * * 0'
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
+          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python iam_review_digest.py
 
       - name: Send NEW jobs email
         # Tagged [notify] code changes permit a controlled live delivery smoke test.
