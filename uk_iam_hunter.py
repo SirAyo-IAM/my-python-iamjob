@@ -222,6 +222,11 @@ ATS_DOMAINS = {
 # IAM/PAM rather than a generic role whose page happens to contain words such
 # as "authentication" or "authorization".
 TITLE_SIGNAL_WEIGHTS = {
+    # Operational authentication and IDAM titles used by UK employers.
+    "authentication services": 92,
+    "authentication specialist": 88,
+    "identity governance platform": 105,
+    "idam": 95,
     "identity & access": 105,
     "identity and access": 105,
     "identity access": 100,
@@ -643,7 +648,7 @@ GLOBAL_DISCOVERY_QUERIES = [
 ]
 
 DISCOVERY_TITLE_HINTS = [
-    "iam", "identity", "access", "pam", "privileged", "cyberark",
+    "iam", "idam", "identity", "access", "authentication", "pam", "privileged", "cyberark",
     "sailpoint", "saviynt", "okta", "entra", "sso", "federation",
     "directory services", "jml", "entitlement", "ciam", "vaulting",
     "security",
@@ -2041,6 +2046,17 @@ def is_target_job(
     for excluded in EXCLUDED_TITLE_TERMS:
         if excluded in title_low:
             return False, [], 0, "REJECTED", f"excluded title term: {excluded}"
+
+    # A standing recruitment/talent pipeline is not an open requisition.
+    # NTT DATA's R149580 advert expressly invites future applicants before
+    # any specific vacancies exist; do not classify it as a current job.
+    pending_pipeline = (
+        "this advertisement is intended to identify and engage candidates"
+        in description.lower()
+        and "advance of specific vacancies" in description.lower()
+    )
+    if pending_pipeline:
+        return False, [], 0, "REJECTED", "future talent pipeline, not an open vacancy"
 
     if explicit_non_permanent(title, description, employment_type):
         return False, [], 0, "REJECTED", "explicit non-permanent employment"
