@@ -1945,6 +1945,46 @@ def extract_reference(text: str) -> str:
     return ""
 
 
+def extract_closing_date(text: str, today=None) -> Tuple[str, bool]:
+    """Return (YYYY-MM-DD, year_inferred) for a labelled application deadline.
+
+    An absent year is inferred only for an upcoming date within 45 days and,
+    if a weekday was printed, only when that weekday agrees. It is never
+    presented as an original posting date.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    head = re.sub(r"\s+", " ", text or "")[:5500]
+    pattern = re.compile(
+        r"\b(?:closing date|application deadline|applications close)\s*[:\-]?\s*"
+        r"(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+)?"
+        r"(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)(?:\s+(\d{4}))?\b",
+        re.I,
+    )
+    for m in pattern.finditer(head):
+        weekday, day, month, year = m.groups()
+        inferred = not bool(year)
+        years = [int(year)] if year else [today.year, today.year + 1]
+        for candidate_year in years:
+            try:
+                candidate = datetime.strptime(
+                    f"{int(day)} {month} {candidate_year}", "%d %B %Y"
+                ).date()
+            except ValueError:
+                try:
+                    candidate = datetime.strptime(
+                        f"{int(day)} {month} {candidate_year}", "%d %b %Y"
+                    ).date()
+                except ValueError:
+                    continue
+            if weekday and candidate.strftime("%A").lower() != weekday.lower():
+                continue
+            days = (candidate - today).days
+            if inferred and not (0 <= days <= 45):
+                continue
+            return candidate.isoformat(), inferred
+    return "", False
+
+
 def extract_posted_date(text: str) -> str:
 
     patterns = [
@@ -3065,6 +3105,9 @@ def company_name_from_soup(soup: BeautifulSoup, url: str) -> str:
 
 
 def dynamic_company(url: str, soup: Optional[BeautifulSoup] = None) -> Tuple[str, List[str], List[str]]:
+    # Post Office's careers template can expose a truncated "Co" brand name.
+    if host(url) == "careers.postoffice.co.uk":
+        return ("Post Office Ltd", [host(url)], [])
     # Jobvite's page chrome can be mistaken for the employer name.
     if host(url) == "jobs.jobvite.com" and urlparse(url).path.lower().startswith("/maplesandcalder/"):
         return ("Maples Group", [host(url)], [])
@@ -3421,6 +3464,35 @@ def extract_results_from_candidate(
         barclays_result = extract_barclays_job_result(soup, final_url, method)
         if barclays_result:
             return [barclays_result]
+
+    if host(final_url) == "careers.postoffice.co.uk":
+        # The shared header/footer contains jobs and IAM keywords unrelated
+        # to this requisition. Scope the text to the job's own summary/body.
+        full_text = soup.get_text(" ", strip=True)
+        start = re.search(r"\bSummary\s+Salary\s*:", full_text, re.I)
+        scoped = full_text[start.start():] if start else full_text
+        stop = re.search(r"\b(?:Application Guidance|What we can offer you)\b", scoped, re.I)
+        if stop:
+            scoped = scoped[:stop.start()]
+        labels = re.findall(
+            r"\bLocation\s*:\s*(.{2,90}?)(?=\s+(?:Closing Date|Contract Type|"
+            r"Working pattern|Hours per week|Reference number|What to expect)\b|$)",
+            scoped[:2500], re.I,
+        )
+        locations = [
+            re.sub(r"\s+", " ", value).strip()
+            for value in labels
+            if contains_uk_location(value)
+        ]
+        result = build_result(
+            company=("Post Office Ltd", [host(final_url)], []),
+            title=page_title(soup),
+            description=scoped,
+            location=locations[0] if locations else "",
+            url=final_url,
+            method=f"{method} -> Post Office role-specific HTML",
+        )
+        return [result] if result else []
 
     if host(final_url).endswith("ansonmccade.com") and "vacancy_detail.php" in final_url.lower():
         anson_result = extract_anson_mccade_job_result(soup, final_url, method)
@@ -3856,6 +3928,7 @@ def build_result(
         date_posted = extract_posted_date(full_text)
 
     arrangement = extract_working_arrangement(full_text)
+    closing_date, closing_date_inferred = extract_closing_date(description)
 
     return {
         "company": company[0],
@@ -3869,6 +3942,8 @@ def build_result(
         "description_excerpt": description[:350],
         "salary": salary,
         "date_posted": date_posted,
+        "closing_date": closing_date,
+        "closing_date_year_inferred": "YES" if closing_date_inferred else "NO",
         "job_reference": extract_reference(full_text),
         "match_type": classify_match_type(title),
         "match_score": score,
@@ -5535,6 +5610,8 @@ RESULT_FIELDS = [
     "description_excerpt",
     "salary",
     "date_posted",
+    "closing_date",
+    "closing_date_year_inferred",
     "job_reference",
     "match_type",
     "match_score",
