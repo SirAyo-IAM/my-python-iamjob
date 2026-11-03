@@ -290,6 +290,21 @@ jobs:
           from send_email import email_rejection_reasons
           # Regression: a new official role with an imminent, labelled
           # closing date is actionable even when its posting date is absent.
+          from uk_iam_hunter import balanced_candidate_urls
+          pools = [
+              [f"https://employer-one.example/jobs/{n}" for n in range(10)],
+              [f"https://employer-two.example/jobs/{n}" for n in range(10)],
+              [f"https://employer-three.example/jobs/{n}" for n in range(10)],
+          ]
+          picked = balanced_candidate_urls(
+              ["https://official.example/jobs/first"], pools, 13
+          )
+          assert len(picked) == 13
+          assert all(any(domain in url for url in picked) for domain in (
+              "employer-one.example", "employer-two.example", "employer-three.example"
+          ))
+          assert picked[0] == "https://official.example/jobs/first"
+          print("PASS | discovery budget interleaves every IAM and regional search family")
           from uk_iam_hunter import extract_closing_date, extract_results_from_candidate
           from datetime import date
           from unittest.mock import patch as synthetic_patch
