@@ -2,7 +2,7 @@
 """Email UK IAM Job Hunter V5.4 results through Brevo."""
 from __future__ import annotations
 import csv, html, json, os, re, sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Dict, List
@@ -54,6 +54,20 @@ def recommend_cv(job: Dict[str, str]) -> str:
     if any(t in haystack for t in ("entra id", "microsoft entra", "azure ad", "azure active directory", "conditional access", "azure ad connect", "microsoft graph")): return CV_OPERATIONAL
     return CV_GENERAL
 
+def verified_upcoming_deadline(job: Dict[str, str]) -> bool:
+    """A role without a published posting date can be newly discovered and
+    actionable when its employer advertises an explicit upcoming deadline.
+    This is not evidence that it was posted within seven days.
+    """
+    value = str(job.get("closing_date", "") or "").strip()
+    try:
+        closing = date.fromisoformat(value)
+    except ValueError:
+        return False
+    days_left = (closing - datetime.now(UK_TZ).date()).days
+    return 0 <= days_left <= 45
+
+
 def email_rejection_reasons(job: Dict[str, str]) -> List[str]:
     """Explain each notification gate without relaxing any eligibility rule.
 
@@ -97,7 +111,8 @@ def email_rejection_reasons(job: Dict[str, str]) -> List[str]:
         reasons.append("official vacancy URL missing")
     posted = str(job.get("date_posted", "") or "").strip()
     if not posted:
-        reasons.append("original posting date missing")
+        if not verified_upcoming_deadline(job):
+            reasons.append("original posting date missing and no verified upcoming closing date")
     else:
         try:
             posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
@@ -248,10 +263,10 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     for job in jobs[:MAX_EMAIL_ROWS]:
         url=job.get("url") or job.get("canonical_url") or ""; title=safe(job.get("title", "")); company=safe(job.get("company", ""))
         role=f'<a href="{safe(url)}" style="color:#0b57d0;text-decoration:none;">{title or "View job"}</a>' if url else title
-        vals=[company,role,safe(job.get("notification_status","NEW")),safe(job.get("match_type","")),safe(job.get("match_score","")),safe(job.get("confidence","")),safe(job.get("location","")),safe(job.get("location_status","")),safe(job.get("working_arrangement","")),safe(job.get("employment_type","")),safe(job.get("salary","")),safe(job.get("date_posted","")),safe(recommend_cv(job)),safe(job.get("matched_keywords",""))]
+        vals=[company,role,safe(job.get("notification_status","NEW")),safe(job.get("match_type","")),safe(job.get("match_score","")),safe(job.get("confidence","")),safe(job.get("location","")),safe(job.get("location_status","")),safe(job.get("working_arrangement","")),safe(job.get("employment_type","")),safe(job.get("salary","")),safe(job.get("date_posted") or "Not published"),safe(job.get("closing_date","")),safe(recommend_cv(job)),safe(job.get("matched_keywords",""))]
         rendered_rows.append("<tr>"+"".join(f"<td>{v}</td>" for v in vals)+"</tr>")
     rows="\n".join(rendered_rows)
-    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Posted','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
+    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}<br>NEW means first discovered by the Hunter, not necessarily posted today. Where no posting date was published, a verified upcoming closing date is required.</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Posted','Closing','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
 
 def build_payload(jobs: List[Dict[str,str]], sender_email: str, recipient_email: str) -> Dict[str,object]:
     today=datetime.now(UK_TZ).strftime("%d %b %Y")
@@ -310,6 +325,9 @@ def main() -> None:
         else:
             eligible.append(job)
     jobs=deduplicate_email_jobs(eligible)
+    if "--audit-only" in sys.argv:
+        print(f"NOTIFICATION AUDIT | new_candidates={len(raw_jobs)} | static_eligible={len(jobs)} | withheld={len(raw_jobs) - len(eligible)} | no email attempted")
+        return
     if len(eligible) != len(jobs):
         print(f"Deduplicated {len(eligible) - len(jobs)} verified notification candidate(s).")
     if not jobs:
