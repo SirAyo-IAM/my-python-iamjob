@@ -343,6 +343,24 @@ jobs:
           assert not v and len(m) == 1 and reasons["permanent employment not evidenced"] == 1
           assert not review_candidate({**uncertain, "location_status": "UK UNKNOWN"},
                                       email_rejection_reasons(uncertain))
+          from iam_review_digest import build_html as review_html
+          # Missing geography and generic "remote" never enter manual review.
+          assert not review_candidate({**uncertain, "location": ""},
+                                      email_rejection_reasons(uncertain))
+          assert not review_candidate({**uncertain, "location": "Remote"},
+                                      email_rejection_reasons(uncertain))
+          assert not review_candidate({**uncertain, "location": "United Kingdom (confirmed)"},
+                                      email_rejection_reasons(uncertain))
+          assert review_candidate({**uncertain, "location": "Manchester, GB"},
+                                  email_rejection_reasons(uncertain))
+          assert review_candidate({**uncertain, "location": "Remote - United Kingdom"},
+                                  email_rejection_reasons(uncertain))
+          digest_html = review_html([], [(uncertain, email_rejection_reasons(uncertain))],
+                                    {"permanent employment not evidenced": 1}, 0, daily=True)
+          assert "Daily Needs Manual Check" in digest_html
+          assert "Verified Matches (current evidence" not in digest_html
+          assert "Needs Manual Check" in digest_html
+          print("PASS | daily manual-review digest, UK-located-only and missing-location exclusion")
           # The 23 Oct-2 Nov repair must not re-arm already-eligible jobs.
           from uk_iam_hunter import job_state_identity
           old_job = {**uncertain, "first_seen": "2026-10-27T08:00:00+00:00"}
@@ -573,6 +591,19 @@ jobs:
         run: |
           set -euo pipefail
           python iam_review_digest.py --audit-only
+
+      - name: Send daily high-confidence Needs Manual Check digest
+        # Only the late-afternoon scheduled run sends this separate review.
+        # No email if there are zero qualifying, UK-located manual-check roles.
+        if: github.event_name == 'schedule' && github.event.schedule == '37 16 * * *'
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
+          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python iam_review_digest.py --daily
 
       - name: Send weekly verified and needs-review status digest
         if: github.event_name == 'schedule' && github.event.schedule == '43 17 * * 0'
