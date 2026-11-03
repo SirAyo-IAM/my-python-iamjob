@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Weekly UK IAM Hunter transparency digest.
+"""UK IAM Hunter manual-review and weekly transparency digests.
 
 This is not a replacement for strictly verified NEW vacancy alerts.
 'Needs Manual Check' contains uncertain employer/ATS matches, not confirmed
@@ -48,7 +48,16 @@ def review_candidate(job, reasons, now=None):
     now = now or datetime.now(timezone.utc)
     if not reasons:
         return False
+    # Fail closed for missing/ambiguous geography. A confirmed UK city,
+    # town, region, GB/UK designation or job-specific UK-remote location
+    # is required. A generic "remote" or unlocated post is not enough.
+    from uk_iam_hunter import contains_uk_location, is_placeholder_location
+    location = str(job.get("location", "") or "").strip()
     if str(job.get("location_status", "")).upper() != "UK CONFIRMED":
+        return False
+    if (not location or is_placeholder_location(location)
+            or location.lower() == "united kingdom (confirmed)"
+            or not contains_uk_location(location)):
         return False
     if str(job.get("match_type", "")).upper() != "CORE IAM":
         return False
@@ -105,7 +114,7 @@ def generate_digest(rows, source_audit=None, check_live=False):
     return verified[:MAX_VERIFIED], review[:MAX_REVIEW], counts, audit_rejections
 
 
-def build_html(verified, review, reasons, audit_rejections):
+def build_html(verified, review, reasons, audit_rejections, daily=False):
     esc = lambda value: html.escape(str(value or ""), quote=True)
     def section(items, with_reasons):
         if not items:
@@ -127,14 +136,16 @@ def build_html(verified, review, reasons, audit_rejections):
     ) or "<li>No recorded eligibility failures.</li>"
     return (
         "<html><body style='font-family:Arial,sans-serif;max-width:820px'>"
-        "<h2>UK IAM Hunter — Weekly Discovery & Review</h2>"
-        "<p><strong>Weekly status digest, not a new-vacancy alert.</strong> "
+        ("<h2>UK IAM Hunter — Daily Needs Manual Check</h2>" if daily else
+         "<h2>UK IAM Hunter — Weekly Discovery & Review</h2>")
+        ("<p><strong>Daily unverified job review, not a verified vacancy alert.</strong> " if daily
+         else "<p><strong>Weekly status digest, not a new-vacancy alert.</strong> ")
         "A listing under Needs Manual Check is NOT confirmed permanent, current, "
         "or application-open. Check the official employer vacancy before applying.</p>"
         f"<p>Current audit: {len(verified)} displayed verified matches; "
         f"{len(review)} displayed unverified matches; {audit_rejections} source-level rejections.</p>"
-        "<h3>Verified Matches (current evidence; may already have been emailed)</h3>"
-        + section(verified, False)
+        + ("" if daily else "<h3>Verified Matches (current evidence; may already have been emailed)</h3>"
+           + section(verified, False))
         + "<h3>Needs Manual Check (unverified — never included in verified alerts)</h3>"
         + section(review, True)
         + "<h3>Verification failure counts across current results</h3><ul>"
@@ -158,15 +169,20 @@ def main():
     )
     if "--audit-only" in sys.argv:
         return
+    daily = "--daily" in sys.argv
+    if daily and not review:
+        print("DAILY REVIEW | no UK-confirmed high-confidence unverified IAM roles; email not sent")
+        return
     payload = {
         "sender": {"name": "UK IAM Hunter Review", "email": require_env("BREVO_SENDER_EMAIL")},
         "to": [{"email": require_env("REPORT_EMAIL")}],
-        "subject": "UK IAM Hunter — Weekly Discovery & Needs Review",
-        "htmlContent": build_html(verified, review, reasons, rejects),
-        "tags": ["uk-iam-weekly-review"],
+        "subject": ("UK IAM Hunter — Daily Needs Manual Check" if daily
+                    else "UK IAM Hunter — Weekly Discovery & Needs Review"),
+        "htmlContent": build_html(verified, review, reasons, rejects, daily=daily),
+        "tags": ["uk-iam-daily-review" if daily else "uk-iam-weekly-review"],
     }
     ident = send_report(require_env("BREVO_API_KEY"), payload)
-    print(f"Weekly review digest accepted by Brevo: {ident}")
+    print(f"{'Daily' if daily else 'Weekly'} review digest accepted by Brevo: {ident}")
 
 
 if __name__ == "__main__":
