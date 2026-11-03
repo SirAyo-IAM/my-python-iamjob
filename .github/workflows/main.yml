@@ -480,7 +480,8 @@ jobs:
           python send_email.py --audit-only
 
       - name: Send NEW jobs email
-        if: github.event_name != 'push'
+        # Tagged [notify] code changes permit a controlled live delivery smoke test.
+        if: github.event_name != 'push' || contains(github.event.head_commit.message, '[notify]')
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
@@ -494,7 +495,7 @@ jobs:
       # Persist notification state only AFTER the email has been accepted.
       # An unverified or unsent vacancy remains retryable on the next run.
       - name: Save seen-job state
-        if: github.event_name != 'push' && success()
+        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[notify]')) && success()
         uses: actions/cache/save@v4
         with:
           path: .iam_state
