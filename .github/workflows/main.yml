@@ -373,6 +373,19 @@ jobs:
           assert "original posting date missing and no verified upcoming closing date" in email_rejection_reasons({
               **base, "date_posted": "", "closing_date": ""
           })
+          recent_with_deadline = {
+              **base,
+              "date_posted": (datetime.now(timezone.utc) - timedelta(days=12)).isoformat(),
+              "closing_date": closing.isoformat(),
+          }
+          assert email_worthy(recent_with_deadline), email_rejection_reasons(recent_with_deadline)
+          stale_even_with_deadline = {
+              **recent_with_deadline,
+              "date_posted": (datetime.now(timezone.utc) - timedelta(days=65)).isoformat(),
+          }
+          assert not email_worthy(stale_even_with_deadline)
+          assert not email_worthy({**recent_with_deadline, "closing_date": ""})
+
           print("PASS | official role-specific location, closing-date and missing-post-date safeguard")
           assert email_rejection_reasons(base) == []
           assert "permanent employment not evidenced" in email_rejection_reasons({**base, "employment_type": "Full-time"})
