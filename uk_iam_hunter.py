@@ -6385,6 +6385,11 @@ def run_self_test() -> None:
         first_all, first_notify, first_stats = classify_new_jobs(
             [sample_job]
         )
+        # Simulate Brevo acceptance of the first notification before the
+        # second scan, consistent with the delivery-aware production flow.
+        sent_state = load_seen_state()
+        sent_state["jobs"][job_state_identity(sample_job)]["notification_pending"] = False
+        save_seen_state(sent_state)
         second_all, second_notify, second_stats = classify_new_jobs(
             [sample_job]
         )
@@ -6435,6 +6440,11 @@ def run_self_test() -> None:
         pending_state = load_seen_state()["jobs"][job_state_identity(pending_job)]
         verified_job = {**pending_job, "employment_type": "Permanent"}
         pending_third, third_notifications, _ = classify_new_jobs([verified_job])
+        # A previously withheld record becomes retryable NEW once its
+        # permanent evidence is verified; after successful delivery it is SEEN.
+        confirmed_state = load_seen_state()
+        confirmed_state["jobs"][job_state_identity(verified_job)]["notification_pending"] = False
+        save_seen_state(confirmed_state)
         pending_fourth, fourth_notifications, _ = classify_new_jobs([verified_job])
         pending_ok = (
             pending_first[0]["notification_status"] == "NEW"
