@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Email UK IAM Job Hunter V5.4 results through Brevo."""
 from __future__ import annotations
-import csv, html, os, re, sys
+import csv, html, json, os, re, sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -264,6 +264,36 @@ def send_report(api_key: str, payload: Dict[str,object]) -> str:
     except ValueError: data={}
     return str(data.get("messageId","")).strip()
 
+def mark_confirmed_notifications(jobs: List[Dict[str, str]]) -> int:
+    """Clear pending flags only for vacancies included in an accepted email.
+
+    Jobs withheld by static checks or the final live-page check remain pending,
+    so the next scan can retry them without manufacturing a repost.
+    """
+    path = Path(os.getenv("IAM_SEEN_STATE_FILE", ".iam_state/seen_jobs.json"))
+    if not path.exists():
+        raise FileNotFoundError(f"Cannot confirm delivered notifications: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        state = json.load(handle)
+    records = state.get("jobs", {})
+    if not isinstance(records, dict):
+        raise RuntimeError("Invalid Hunter notification state")
+    from uk_iam_hunter import job_state_identity
+    updated = 0
+    for job in jobs:
+        key = str(job.get("state_id", "") or "").strip() or job_state_identity(job)
+        record = records.get(key)
+        if isinstance(record, dict) and record.get("notification_pending"):
+            record["notification_pending"] = False
+            record["notification_sent_at"] = datetime.now(timezone.utc).isoformat()
+            updated += 1
+    temp = path.with_name(path.name + ".tmp")
+    with temp.open("w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, ensure_ascii=False)
+    os.replace(temp, path)
+    return updated
+
+
 def main() -> None:
     raw_jobs=read_jobs(RESULT_CSV)
     eligible = []
@@ -300,6 +330,8 @@ def main() -> None:
     payload=build_payload(jobs,require_env("BREVO_SENDER_EMAIL"),require_env("REPORT_EMAIL"))
     print(f"Preparing IAM email with {len(jobs)} NEW result(s)...")
     message_id=send_report(require_env("BREVO_API_KEY"),payload)
+    confirmed = mark_confirmed_notifications(jobs)
+    print(f"Confirmed {confirmed} delivered vacancy state record(s).")
     print(f"Email sent successfully. Brevo message ID: {message_id}" if message_id else "Email sent successfully.")
 
 if __name__ == "__main__":
