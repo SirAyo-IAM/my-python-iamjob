@@ -256,6 +256,26 @@ jobs:
           assert not application_deadline_has_passed("Posted 12 October 2026", today)
           assert not application_deadline_has_passed("Closing date: 29 September", today)
           print("PASS | explicit application deadline freshness guard")
+          # Newly discovered jobs remain pending until confirmed email delivery.
+          from unittest.mock import patch as mock_patch
+          from uk_iam_hunter import classify_new_jobs
+          with TemporaryDirectory() as tempdir:
+              import uk_iam_hunter as hunter
+              original_state_file = hunter.SEEN_STATE_FILE
+              hunter.SEEN_STATE_FILE = Path(tempdir) / "seen_jobs.json"
+              try:
+                  one, to_notify, _ = classify_new_jobs([base])
+                  assert len(to_notify) == 1
+                  assert json.loads(hunter.SEEN_STATE_FILE.read_text())["jobs"][one[0]["state_id"]]["notification_pending"]
+                  again, retry, _ = classify_new_jobs([base])
+                  assert len(retry) == 1 and retry[0]["notification_status"] == "NEW"
+                  from send_email import mark_confirmed_notifications
+                  with mock_patch.dict(os.environ, {"IAM_SEEN_STATE_FILE": str(hunter.SEEN_STATE_FILE)}):
+                      assert mark_confirmed_notifications([one[0]]) == 1
+                  after, subsequent, _ = classify_new_jobs([base])
+                  assert not subsequent and after[0]["notification_status"] == "SEEN"
+              finally:
+                  hunter.SEEN_STATE_FILE = original_state_file
           from send_email import email_rejection_reasons
           assert email_rejection_reasons(base) == []
           assert "permanent employment not evidenced" in email_rejection_reasons({**base, "employment_type": "Full-time"})
@@ -374,13 +394,6 @@ jobs:
           print("Remembered jobs:", len(state.get("jobs", {})))
           PY
 
-      - name: Save seen-job state
-        if: github.event_name != 'push'
-        uses: actions/cache/save@v4
-        with:
-          path: .iam_state
-          key: iam-seen-${{ runner.os }}-${{ github.run_id }}
-
       - name: Upload job results
         uses: actions/upload-artifact@v4
         with:
@@ -407,3 +420,13 @@ jobs:
         run: |
           set -euo pipefail
           python send_email.py
+
+      # Persist notification state only AFTER the email has been accepted.
+      # An unverified or unsent vacancy remains retryable on the next run.
+      - name: Save seen-job state
+        if: github.event_name != 'push' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: .iam_state
+          key: iam-seen-${{ runner.os }}-${{ github.run_id }}
+
