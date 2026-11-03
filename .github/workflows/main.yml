@@ -332,7 +332,7 @@ jobs:
           assert "excluded non-IAM title" in email_rejection_reasons({**base, "title": "Senior Security Engineering Manager"})
           assert "excluded non-IAM title" not in email_rejection_reasons({**base, "title": "Identity and Access Management Lead"})
           assert "excluded non-IAM title" not in email_rejection_reasons({**base, "title": "Identity Security Engineering Manager"})
-          assert "original posting date missing" in email_rejection_reasons({**base, "date_posted": ""})
+          assert "original posting date missing and no verified upcoming closing date" in email_rejection_reasons({**base, "date_posted": ""})
           assert "substantive job description not verified" in email_rejection_reasons({**base, "description_verified": "NO"})
           assert "UK job location not confirmed" in email_rejection_reasons({**base, "location_status": "UK UNKNOWN"})
           assert email_worthy(base) == (not email_rejection_reasons(base))
