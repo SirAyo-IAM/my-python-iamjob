@@ -592,29 +592,9 @@ jobs:
           set -euo pipefail
           python iam_review_digest.py --audit-only
 
-      - name: Send daily high-confidence Needs Manual Check digest
-        # Only the late-afternoon scheduled run sends this separate review.
-        # No email if there are zero qualifying, UK-located manual-check roles.
-        if: github.event_name == 'schedule' && github.event.schedule == '37 16 * * *'
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python iam_review_digest.py --daily
-
-      - name: Send weekly verified and needs-review status digest
-        if: github.event_name == 'schedule' && github.event.schedule == '43 17 * * 0'
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python iam_review_digest.py
+      # Manual-review digests remain available through the audit above,
+      # but are never emailed: unverified vacancies must not be delivered.
+      # Keep the separate verified NEW-jobs notification step below.
 
       - name: Send NEW jobs email
         # Tagged [notify] code changes permit a controlled live delivery smoke test.
