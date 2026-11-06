@@ -596,7 +596,7 @@ jobs:
       # verified vacancy notification. Apply the review module's strong
       # UK-location, high-IAM-relevance, and non-contract safeguards.
       - name: Send daily UK IAM needs-manual-check email
-        if: github.event_name == 'schedule' && github.event.schedule == '37 16 * * *'
+        if: (github.event_name == 'schedule' && github.event.schedule == '37 16 * * *') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[review-smoke]'))
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
