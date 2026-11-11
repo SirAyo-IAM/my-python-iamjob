@@ -109,29 +109,6 @@ def email_rejection_reasons(job: Dict[str, str]) -> List[str]:
     url = str(job.get("url") or job.get("canonical_url") or "").strip()
     if not url:
         reasons.append("official vacancy URL missing")
-    posted = str(job.get("date_posted", "") or "").strip()
-    if not posted:
-        if not verified_upcoming_deadline(job):
-            reasons.append("original posting date missing and no verified upcoming closing date")
-    else:
-        try:
-            posted_at = datetime.fromisoformat(posted.replace("Z", "+00:00"))
-            if posted_at.tzinfo is None:
-                posted_at = posted_at.replace(tzinfo=timezone.utc)
-            age = datetime.now(timezone.utc) - posted_at
-            # An employer-verified approaching closing date keeps a newly
-            # discovered role actionable even if it was originally posted more
-            # than seven days ago. Prevent the exception reviving stale jobs
-            # older than 45 days, and never infer a repost from updates.
-            actionable_with_deadline = (
-                verified_upcoming_deadline(job) and age <= timedelta(days=45)
-            )
-            if age < -timedelta(days=1) or (
-                age > timedelta(days=7) and not actionable_with_deadline
-            ):
-                reasons.append("original posting date outside freshness window")
-        except (ValueError, OverflowError):
-            reasons.append("original posting date invalid")
     host = (urlparse(url).hostname or "").lower()
     if any(host == d or host.endswith("." + d) for d in BLOCKED_EMAIL_DOMAINS):
         reasons.append("blocked job-board or aggregator URL")
@@ -272,10 +249,10 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     for job in jobs[:MAX_EMAIL_ROWS]:
         url=job.get("url") or job.get("canonical_url") or ""; title=safe(job.get("title", "")); company=safe(job.get("company", ""))
         role=f'<a href="{safe(url)}" style="color:#0b57d0;text-decoration:none;">{title or "View job"}</a>' if url else title
-        vals=[company,role,safe(job.get("notification_status","NEW")),safe(job.get("match_type","")),safe(job.get("match_score","")),safe(job.get("confidence","")),safe(job.get("location","")),safe(job.get("location_status","")),safe(job.get("working_arrangement","")),safe(job.get("employment_type","")),safe(job.get("salary","")),safe(job.get("date_posted") or "Not published"),safe(job.get("closing_date","")),safe(recommend_cv(job)),safe(job.get("matched_keywords",""))]
+        vals=[company,role,safe(job.get("notification_status","NEW")),safe(job.get("match_type","")),safe(job.get("match_score","")),safe(job.get("confidence","")),safe(job.get("location","")),safe(job.get("location_status","")),safe(job.get("working_arrangement","")),safe(job.get("employment_type","")),safe(job.get("salary","")),safe(job.get("closing_date","")),safe(recommend_cv(job)),safe(job.get("matched_keywords",""))]
         rendered_rows.append("<tr>"+"".join(f"<td>{v}</td>" for v in vals)+"</tr>")
     rows="\n".join(rendered_rows)
-    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}<br>NEW means first discovered by the Hunter, not necessarily posted today. Where no posting date was published, a verified upcoming closing date is required.</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Posted','Closing','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
+    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}<br>NEW means first discovered by the Hunter, not necessarily posted today. Original posting date is not an eligibility condition; live applications and explicit closing dates are still checked.</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Closing','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
 
 def build_payload(jobs: List[Dict[str,str]], sender_email: str, recipient_email: str) -> Dict[str,object]:
     today=datetime.now(UK_TZ).strftime("%d %b %Y")
