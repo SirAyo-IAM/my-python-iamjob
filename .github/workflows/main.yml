@@ -154,7 +154,7 @@ jobs:
           from send_email import deduplicate_email_jobs, email_worthy
           # User-reported missed official vacancies must remain discovery seeds.
           # These are candidate inputs, not automatic emails: the live UK,
-          # permanent, original-date and relevance filters still apply.
+          # permanent and relevance filters still apply.
           from iam_priority_discovery import DIRECT_JOB_SEEDS, PRIORITY_OFFICIAL_QUERIES, recover_tesco_employment_type
           assert any("/sites/CX_1001/job/15746" in url for url in DIRECT_JOB_SEEDS)
           # Real employer regression set supplied on 3 November. These seeds
@@ -261,9 +261,9 @@ jobs:
           assert not email_worthy({**base, "match_score": "20"})
           assert not email_worthy({**base, "source_method": ""})
           stale = {**base, "date_posted": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()}
-          assert not email_worthy(stale)
-          assert not email_worthy({**base, "date_posted": ""})
-          assert not email_worthy({**base, "date_posted": "unverified"})
+          assert email_worthy(stale)
+          assert email_worthy({**base, "date_posted": ""})
+          assert email_worthy({**base, "date_posted": "unverified"})
           # A worldwide remote-jobs aggregator produced a false-positive CyberArk alert.
           # Reject its original URL even when the extracted title/location look UK IAM.
           aggregator = {**base, "company": "United States Digital Experience Platforms",
@@ -422,10 +422,10 @@ jobs:
           assert postoffice[0]["description_verified"] == "YES"
           from send_email import verified_upcoming_deadline
           assert verified_upcoming_deadline({**base, "closing_date": closing.isoformat()})
-          assert "original posting date missing and no verified upcoming closing date" not in email_rejection_reasons({
+          assert email_rejection_reasons({
               **base, "date_posted": "", "closing_date": closing.isoformat()
           })
-          assert "original posting date missing and no verified upcoming closing date" in email_rejection_reasons({
+          assert email_rejection_reasons({
               **base, "date_posted": "", "closing_date": ""
           })
           recent_with_deadline = {
@@ -438,8 +438,8 @@ jobs:
               **recent_with_deadline,
               "date_posted": (datetime.now(timezone.utc) - timedelta(days=65)).isoformat(),
           }
-          assert not email_worthy(stale_even_with_deadline)
-          assert not email_worthy({**recent_with_deadline, "closing_date": ""})
+          assert email_worthy(stale_even_with_deadline)
+          assert email_worthy({**recent_with_deadline, "closing_date": ""})
 
           print("PASS | official role-specific location, closing-date and missing-post-date safeguard")
           assert email_rejection_reasons(base) == []
@@ -448,7 +448,7 @@ jobs:
           assert "excluded non-IAM title" in email_rejection_reasons({**base, "title": "Senior Security Engineering Manager"})
           assert "excluded non-IAM title" not in email_rejection_reasons({**base, "title": "Identity and Access Management Lead"})
           assert "excluded non-IAM title" not in email_rejection_reasons({**base, "title": "Identity Security Engineering Manager"})
-          assert "original posting date missing and no verified upcoming closing date" in email_rejection_reasons({**base, "date_posted": ""})
+          assert email_worthy({**base, "date_posted": ""})
           assert "substantive job description not verified" in email_rejection_reasons({**base, "description_verified": "NO"})
           assert "UK job location not confirmed" in email_rejection_reasons({**base, "location_status": "UK UNKNOWN"})
           assert email_worthy(base) == (not email_rejection_reasons(base))
@@ -472,9 +472,9 @@ jobs:
           GLOBAL_SEARCH_QUERY_LIMIT: "30"
           MAX_GLOBAL_CANDIDATES: "180"
           MAX_LISTING_LINKS: "80"
-          IAM_RECENT_SEARCH_HINT: "posted this week"
+          IAM_RECENT_SEARCH_HINT: ""
           BRAVE_SEARCH_API_KEY: "" # Pause paid Brave requests; retain free search/official discovery
-          BRAVE_SEARCH_FRESHNESS: "pw"
+          BRAVE_SEARCH_FRESHNESS: ""
           USE_COMPANY_SEARCH_DISCOVERY: "false"
           SEARCH_ENGINE_MODE: "light"
           USE_PLAYWRIGHT: "false"
@@ -495,10 +495,10 @@ jobs:
           IAM_SEARCH_TIMEOUT: "8"
           IAM_JOB_TIMEOUT: "12"
           IAM_MAX_SEARCH_RESULTS: "12"
-          IAM_RECENT_SEARCH_HINT: "posted this week"
+          IAM_RECENT_SEARCH_HINT: ""
           SEARCH_ENGINE_MODE: "light"
           BRAVE_SEARCH_API_KEY: "" # Pause paid Brave requests; retain free search/official discovery
-          BRAVE_SEARCH_FRESHNESS: "pw"
+          BRAVE_SEARCH_FRESHNESS: ""
           IAM_STATE_DIR: ".iam_state"
           IAM_STATE_RETENTION_DAYS: "180"
           IAM_NOTIFY_UPDATED_JOBS: "false"
@@ -592,32 +592,8 @@ jobs:
           set -euo pipefail
           python iam_review_digest.py --audit-only
 
-      # User-approved daily review: clearly labelled UNVERIFIED, not a
-      # verified vacancy notification. Apply the review module's strong
-      # UK-location, high-IAM-relevance, and non-contract safeguards.
-      - name: Send daily UK IAM needs-manual-check email
-        if: (github.event_name == 'schedule' && github.event.schedule == '37 16 * * *') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[review-smoke]'))
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python iam_review_digest.py --daily
-
-      # User-approved weekly status heartbeat, sent even with zero verified
-      # new jobs, with counts and the reasons candidates were withheld.
-      - name: Send weekly UK IAM discovery status email
-        if: github.event_name == 'schedule' && github.event.schedule == '43 17 * * 0'
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python iam_review_digest.py
+      # Manual-review records remain in audit artifacts only. Never email
+      # vacancies without all verified eligibility and live-application gates.
 
       - name: Send NEW jobs email
         # Tagged [notify] code changes permit a controlled live delivery smoke test.
