@@ -422,10 +422,10 @@ jobs:
           assert postoffice[0]["description_verified"] == "YES"
           from send_email import verified_upcoming_deadline
           assert verified_upcoming_deadline({**base, "closing_date": closing.isoformat()})
-          assert email_rejection_reasons({
+          assert not email_rejection_reasons({
               **base, "date_posted": "", "closing_date": closing.isoformat()
           })
-          assert email_rejection_reasons({
+          assert not email_rejection_reasons({
               **base, "date_posted": "", "closing_date": ""
           })
           recent_with_deadline = {
@@ -441,7 +441,7 @@ jobs:
           assert email_worthy(stale_even_with_deadline)
           assert email_worthy({**recent_with_deadline, "closing_date": ""})
 
-          print("PASS | official role-specific location, closing-date and missing-post-date safeguard")
+          print("PASS | original posting date optional; closing-date and live-page guards retained")
           assert email_rejection_reasons(base) == []
           assert "permanent employment not evidenced" in email_rejection_reasons({**base, "employment_type": "Full-time"})
           assert "non-permanent employment" in email_rejection_reasons({**base, "employment_type": "Contract"})
