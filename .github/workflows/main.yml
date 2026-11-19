@@ -14,13 +14,13 @@ on:
       - "iam_state_reconcile.py"
       - ".github/workflows/main.yml"
 
-  # GitHub's scheduler is best-effort; non-zero minutes reduce peak-hour
-  # congestion. Morning and afternoon runs act as missed-noon fallbacks.
-  # Persistent sent-state prevents duplicate vacancy emails.
+  # Daily emails are scheduled for 12:00 Europe/London. GitHub Actions
+  # scheduling is best-effort, and full discovery may delay delivery.
+  # Morning and afternoon scans still collect/audit results.
   schedule:
     - cron: "17 9 * * *"
       timezone: "Europe/London"
-    - cron: "17 12 * * *"
+    - cron: "0 12 * * *"
       timezone: "Europe/London"
     - cron: "37 16 * * *"
       timezone: "Europe/London"
@@ -607,7 +607,7 @@ jobs:
       # The manual-review email is explicitly labelled UNVERIFIED and
       # only includes candidates with a confirmed UK location and strong IAM relevance.
       - name: Send daily Needs Manual Check email
-        if: github.event_name == 'schedule' && github.event.schedule == '37 16 * * *'
+        if: github.event_name == 'schedule' && github.event.schedule == '0 12 * * *'
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
@@ -629,10 +629,10 @@ jobs:
           python iam_review_digest.py
 
       # One daily verified snapshot, regardless of prior job-alert history.
-      # The other two daily scans still discover/audit jobs but do not
-      # send a duplicate same-day snapshot.
+      # Morning and afternoon scans still discover/audit jobs but do not
+      # send additional daily email snapshots.
       - name: Send daily verified IAM jobs snapshot
-        if: (github.event_name == 'schedule' && github.event.schedule == '37 16 * * *') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-snapshot]'))
+        if: (github.event_name == 'schedule' && github.event.schedule == '0 12 * * *') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-snapshot]'))
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
