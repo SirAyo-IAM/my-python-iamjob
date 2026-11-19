@@ -452,6 +452,18 @@ jobs:
           assert "substantive job description not verified" in email_rejection_reasons({**base, "description_verified": "NO"})
           assert "UK job location not confirmed" in email_rejection_reasons({**base, "location_status": "UK UNKNOWN"})
           assert email_worthy(base) == (not email_rejection_reasons(base))
+          # A previously-seen role is still eligible for the daily full-results
+          # snapshot; explicit publication age does not exclude an active role.
+          from send_email import RESULT_CSV
+          assert RESULT_CSV.name == "uk_iam_results.csv"
+          assert email_worthy({**base, "notification_status": "SEEN",
+                               "date_posted": "2024-01-10"})
+          # Manual-review jobs are no longer excluded solely for age.
+          old_uncertain = {**uncertain, "date_posted": "2024-01-10",
+                           "discovered_at": "2024-01-10T10:00:00+00:00"}
+          assert review_candidate(old_uncertain, email_rejection_reasons(old_uncertain))
+          print("PASS | all-age daily snapshot and old UK IAM manual-review inclusion")
+
           print("PASS | per-vacancy withholding reasons preserve fail-closed email rules")
           print("PASS | description, permanent UK IAM eligibility, live application and closure guards")
           PY
@@ -592,26 +604,49 @@ jobs:
           set -euo pipefail
           python iam_review_digest.py --audit-only
 
-      # Manual-review records remain in audit artifacts only. Never email
-      # vacancies without all verified eligibility and live-application gates.
-
-      - name: Send NEW jobs email
-        # Tagged [notify] code changes permit a controlled live delivery smoke test.
-        if: github.event_name != 'push' || contains(github.event.head_commit.message, '[notify]')
+      # The manual-review email is explicitly labelled UNVERIFIED and
+      # only includes candidates with a confirmed UK location and strong IAM relevance.
+      - name: Send daily Needs Manual Check email
+        if: github.event_name == 'schedule' && github.event.schedule == '37 16 * * *'
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-          IAM_EMAIL_RESULTS_FILE: "uk_iam_new_results.csv"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python iam_review_digest.py --daily
+
+      - name: Send weekly discovery heartbeat
+        if: github.event_name == 'schedule' && github.event.schedule == '43 17 * * 0'
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
+          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python iam_review_digest.py
+
+      # One daily verified snapshot, regardless of prior job-alert history.
+      # The other two daily scans still discover/audit jobs but do not
+      # send a duplicate same-day snapshot.
+      - name: Send daily verified IAM jobs snapshot
+        if: (github.event_name == 'schedule' && github.event.schedule == '37 16 * * *') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-snapshot]'))
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
+          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+          IAM_EMAIL_RESULTS_FILE: "uk_iam_results.csv"
         shell: bash
         run: |
           set -euo pipefail
           python send_email.py
 
       # Persist notification state only AFTER the email has been accepted.
-      # An unverified or unsent vacancy remains retryable on the next run.
+      # Prior emails no longer suppress verified roles in the daily snapshot.
       - name: Save seen-job state
-        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[notify]')) && success()
+        if: github.event_name == 'schedule' && success()
         uses: actions/cache/save@v4
         with:
           path: .iam_state
