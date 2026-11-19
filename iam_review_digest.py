@@ -78,15 +78,10 @@ def review_candidate(job, reasons, now=None):
         return False
     if not job.get("company") or str(job.get("company")).lower() in ("unknown", "discovered employer"):
         return False
-    posted = _parse_date(job.get("date_posted"))
-    if posted and (now - posted.astimezone(timezone.utc)) > timedelta(days=45):
-        return False
-    # If the employer omitted posting date, require recent first observation
-    # (this is discovery recency, NOT proof of datePosted or of a live vacancy).
-    if not posted:
-        first_seen = _parse_date(job.get("first_seen") or job.get("discovered_at"))
-        if not first_seen or (now - first_seen.astimezone(timezone.utc)) > timedelta(days=14):
-            return False
+    # Neither advertised posting age nor first-discovered date excludes a
+    # relevant UK-located vacancy from the manual-review digest.
+    # Employment type, IAM relevance, and UK geography remain mandatory.
+
     return True
 
 
