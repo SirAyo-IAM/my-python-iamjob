@@ -11,6 +11,7 @@ on:
       - "iam_priority_discovery.py"
       - "send_email.py"
       - "iam_review_digest.py"
+      - "iam_daily_delivery.py"
       - "iam_state_reconcile.py"
       - ".github/workflows/main.yml"
 
@@ -66,6 +67,7 @@ jobs:
           }
 
           test -f iam_review_digest.py || { echo "Missing review digest"; exit 1; }
+          test -f iam_daily_delivery.py || { echo "Missing daily dispatcher"; exit 1; }
           test -f iam_state_reconcile.py || { echo "Missing state reconciler"; exit 1; }
 
           test -f send_email.py || {
@@ -131,6 +133,7 @@ jobs:
           python -m py_compile iam_priority_discovery.py
           python -m py_compile send_email.py
           python -m py_compile iam_review_digest.py
+          python -m py_compile iam_daily_delivery.py
           python -m py_compile iam_state_reconcile.py
 
           python - <<'PY'
@@ -598,24 +601,40 @@ jobs:
           set -euo pipefail
           python send_email.py --audit-only
 
+      - name: Verify daily delivery configuration
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          script = Path("iam_daily_delivery.py").read_text()
+          workflow = Path(".github/workflows/main.yml").read_text()
+          assert "subprocess.run([sys.executable, \"send_email.py\"]" in script
+          assert '"iam_review_digest.py", "--daily"' in script
+          assert 'github.event_name == \'schedule\' ||' in workflow
+          assert "delivered_uk_date" in script
+          print("PASS | all scheduled scans may send, using UK-day deduplication")
+          PY
+
       - name: Build weekly manual-review digest audit
         shell: bash
         run: |
           set -euo pipefail
           python iam_review_digest.py --audit-only
 
-      # The manual-review email is explicitly labelled UNVERIFIED and
-      # only includes candidates with a confirmed UK location and strong IAM relevance.
-      - name: Send daily Needs Manual Check email
-        if: github.event_name == 'schedule' && github.event.schedule == '0 12 * * *'
+      # Any of the three scheduled scans can deliver the daily email set.
+      # The dispatcher records one successful delivery set per UK calendar date
+      # in the persistent cached state, preventing repeat alerts after delays.
+      - name: Send daily IAM verified and manual-review digests
+        if: github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-snapshot]'))
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
+          IAM_EMAIL_RESULTS_FILE: "uk_iam_results.csv"
         shell: bash
         run: |
           set -euo pipefail
-          python iam_review_digest.py --daily
+          python iam_daily_delivery.py
 
       - name: Send weekly discovery heartbeat
         if: github.event_name == 'schedule' && github.event.schedule == '43 17 * * 0'
@@ -628,25 +647,10 @@ jobs:
           set -euo pipefail
           python iam_review_digest.py
 
-      # One daily verified snapshot, regardless of prior job-alert history.
-      # Morning and afternoon scans still discover/audit jobs but do not
-      # send additional daily email snapshots.
-      - name: Send daily verified IAM jobs snapshot
-        if: (github.event_name == 'schedule' && github.event.schedule == '0 12 * * *') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-snapshot]'))
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-          IAM_EMAIL_RESULTS_FILE: "uk_iam_results.csv"
-        shell: bash
-        run: |
-          set -euo pipefail
-          python send_email.py
-
       # Persist notification state only AFTER the email has been accepted.
       # Prior emails no longer suppress verified roles in the daily snapshot.
       - name: Save seen-job state
-        if: github.event_name == 'schedule' && success()
+        if: (github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-snapshot]'))) && success()
         uses: actions/cache/save@v4
         with:
           path: .iam_state
