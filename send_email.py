@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-RESULT_CSV = Path(os.getenv("IAM_EMAIL_RESULTS_FILE", "uk_iam_new_results.csv"))
+RESULT_CSV = Path(os.getenv("IAM_EMAIL_RESULTS_FILE", "uk_iam_results.csv"))
 BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
 UK_TZ = ZoneInfo("Europe/London")
 REQUEST_TIMEOUT = 30
@@ -249,14 +249,14 @@ def build_html(jobs: List[Dict[str, str]]) -> str:
     for job in jobs[:MAX_EMAIL_ROWS]:
         url=job.get("url") or job.get("canonical_url") or ""; title=safe(job.get("title", "")); company=safe(job.get("company", ""))
         role=f'<a href="{safe(url)}" style="color:#0b57d0;text-decoration:none;">{title or "View job"}</a>' if url else title
-        vals=[company,role,safe(job.get("notification_status","NEW")),safe(job.get("match_type","")),safe(job.get("match_score","")),safe(job.get("confidence","")),safe(job.get("location","")),safe(job.get("location_status","")),safe(job.get("working_arrangement","")),safe(job.get("employment_type","")),safe(job.get("salary","")),safe(job.get("closing_date","")),safe(recommend_cv(job)),safe(job.get("matched_keywords",""))]
+        vals=[company,role,"CURRENT",safe(job.get("match_type","")),safe(job.get("match_score","")),safe(job.get("confidence","")),safe(job.get("location","")),safe(job.get("location_status","")),safe(job.get("working_arrangement","")),safe(job.get("employment_type","")),safe(job.get("salary","")),safe(job.get("closing_date","")),safe(recommend_cv(job)),safe(job.get("matched_keywords",""))]
         rendered_rows.append("<tr>"+"".join(f"<td>{v}</td>" for v in vals)+"</tr>")
     rows="\n".join(rendered_rows)
-    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> NEW job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}<br>NEW means first discovered by the Hunter, not necessarily posted today. Original posting date is not an eligibility condition; live applications and explicit closing dates are still checked.</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Closing','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
+    return f'''<!doctype html><html><head><meta charset="utf-8"><title>UK IAM Job Hunter V5.4</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#202124;"><div style="max-width:1400px;margin:0 auto;"><h2>UK IAM / PAM Job Hunter V5.4</h2><p><strong>{len(jobs)}</strong> verified current job(s) found.<br>Core IAM: <strong>{core_count}</strong> | Adjacent identity/security: <strong>{adjacent_count}</strong><br>Report generated: {safe(generated)}<br>This is a daily snapshot of all verified active vacancies, including previously reported jobs. Posting age and previous email history do not exclude a vacancy. Expired applications remain excluded.</p><div style="overflow-x:auto;"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>{''.join(f'<th style="text-align:left;padding:8px;border:1px solid #ddd;">{h}</th>' for h in ['Company','Role','Status','Match Type','Score','Confidence','Location','UK Status','Work','Employment','Salary','Closing','Recommended CV','IAM signals'])}</tr></thead><tbody>{rows}</tbody></table></div><p style="margin-top:20px;font-size:12px;color:#666;">Generated automatically by UK IAM / PAM Job Hunter V5.4.</p></div></body></html>'''
 
 def build_payload(jobs: List[Dict[str,str]], sender_email: str, recipient_email: str) -> Dict[str,object]:
     today=datetime.now(UK_TZ).strftime("%d %b %Y")
-    return {"sender":{"name":"UK IAM Job Hunter","email":sender_email},"to":[{"email":recipient_email}],"subject":f"UK IAM Hunter V5.4 - {len(jobs)} NEW role(s) - {today}","htmlContent":build_html(jobs),"tags":["uk-iam-job-hunter-v5-4"]}
+    return {"sender":{"name":"UK IAM Job Hunter","email":sender_email},"to":[{"email":recipient_email}],"subject":f"UK IAM Hunter V5.4 - {len(jobs)} verified current role(s) - {today}","htmlContent":build_html(jobs),"tags":["uk-iam-job-hunter-v5-4"]}
 
 def send_report(api_key: str, payload: Dict[str,object]) -> str:
     response=requests.post(BREVO_ENDPOINT,headers={"accept":"application/json","api-key":api_key,"content-type":"application/json"},json=payload,timeout=REQUEST_TIMEOUT)
@@ -299,8 +299,8 @@ def main() -> None:
     raw_jobs=read_jobs(RESULT_CSV)
     eligible = []
     for job in raw_jobs:
-        if job.get("notification_status", "").strip().upper() != "NEW":
-            continue
+        # The daily snapshot includes both NEW and previously seen roles.
+        # Prior email history must not suppress a currently verified vacancy.
         reasons = email_rejection_reasons(job)
         if reasons:
             print(
@@ -312,12 +312,12 @@ def main() -> None:
             eligible.append(job)
     jobs=deduplicate_email_jobs(eligible)
     if "--audit-only" in sys.argv:
-        print(f"NOTIFICATION AUDIT | new_candidates={len(raw_jobs)} | static_eligible={len(jobs)} | withheld={len(raw_jobs) - len(eligible)} | no email attempted")
+        print(f"NOTIFICATION AUDIT | current_candidates={len(raw_jobs)} | static_eligible={len(jobs)} | withheld={len(raw_jobs) - len(eligible)} | no email attempted")
         return
     if len(eligible) != len(jobs):
         print(f"Deduplicated {len(eligible) - len(jobs)} verified notification candidate(s).")
     if not jobs:
-        print("No email-worthy NEW IAM jobs this run. Email not sent."); return
+        print("No currently verified IAM jobs this run. Email not sent."); return
     checked = []
     for job in jobs:
         if live_application_page(job):
@@ -330,9 +330,9 @@ def main() -> None:
             )
     jobs = checked
     if not jobs:
-        print("No live, verified NEW IAM vacancies. Email not sent."); return
+        print("No live, verified IAM vacancies. Email not sent."); return
     payload=build_payload(jobs,require_env("BREVO_SENDER_EMAIL"),require_env("REPORT_EMAIL"))
-    print(f"Preparing IAM email with {len(jobs)} NEW result(s)...")
+    print(f"Preparing daily IAM email with {len(jobs)} verified current result(s)...")
     message_id=send_report(require_env("BREVO_API_KEY"),payload)
     confirmed = mark_confirmed_notifications(jobs)
     print(f"Confirmed {confirmed} delivered vacancy state record(s).")
