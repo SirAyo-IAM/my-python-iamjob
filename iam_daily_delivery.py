@@ -3,8 +3,8 @@
 
 GitHub schedule events may be delayed or one cron entry may be dropped.
 The first successfully completed schedule run per Europe/London calendar day
-sends verified jobs and the independently-labelled needs-review email.
-A state marker is written only after both commands complete successfully.
+sends only verified jobs; unverified candidates remain in audit artifacts.
+A state marker is written only after the verified-email command succeeds.
 """
 from __future__ import annotations
 
@@ -34,10 +34,8 @@ def run():
 
     env = dict(os.environ)
     env["IAM_EMAIL_RESULTS_FILE"] = "uk_iam_results.csv"
-    # Notify only when verified roles exist, but always attempt the independent
-    # manual-check email. A failed Brevo request stops the workflow and retries.
+    # Only verified jobs may be emailed; keep unverified records in audits.
     subprocess.run([sys.executable, "send_email.py"], check=True, env=env)
-    subprocess.run([sys.executable, "iam_review_digest.py", "--daily"], check=True, env=env)
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     temporary = MARKER.with_suffix(".tmp")
