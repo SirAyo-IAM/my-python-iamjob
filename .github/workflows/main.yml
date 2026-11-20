@@ -611,6 +611,8 @@ jobs:
           assert "subprocess.run([sys.executable, \"send_email.py\"]" in script
           assert '"iam_review_digest.py", "--daily"' not in script
           assert 'github.event_name == \'schedule\' ||' in workflow
+          assert 'python iam_review_digest.py\n' not in workflow
+          assert 'Send weekly discovery heartbeat' not in workflow
           assert "delivered_uk_date" in script
           print("PASS | verified-only daily delivery and UK-day deduplication")
           PY
@@ -621,10 +623,10 @@ jobs:
           set -euo pipefail
           python iam_review_digest.py --audit-only
 
-      # Any of the three scheduled scans can deliver the daily email set.
+      # Any of the three scheduled scans can deliver verified daily email.
       # The dispatcher records one successful delivery set per UK calendar date
       # in the persistent cached state, preventing repeat alerts after delays.
-      - name: Send daily IAM verified and manual-review digests
+      - name: Send daily verified IAM digest
         if: github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-snapshot]'))
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
@@ -635,17 +637,6 @@ jobs:
         run: |
           set -euo pipefail
           python iam_daily_delivery.py
-
-      - name: Send weekly discovery heartbeat
-        if: github.event_name == 'schedule' && github.event.schedule == '43 17 * * 0'
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          BREVO_SENDER_EMAIL: ${{ secrets.BREVO_SENDER_EMAIL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python iam_review_digest.py
 
       # Persist notification state only AFTER the email has been accepted.
       # Prior emails no longer suppress verified roles in the daily snapshot.
