@@ -612,7 +612,7 @@ jobs:
           assert '"iam_review_digest.py", "--daily"' not in script
           assert 'github.event_name == \'schedule\' ||' in workflow
           assert 'python iam_review_digest.py\n' not in workflow
-          assert '- name: Send weekly discovery heartbeat' not in workflow
+          assert not any(line.strip() == '- name: Send weekly discovery heartbeat' for line in workflow.splitlines())
           assert "delivered_uk_date" in script
           print("PASS | verified-only daily delivery and UK-day deduplication")
           PY
