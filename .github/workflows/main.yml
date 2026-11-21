@@ -608,7 +608,7 @@ jobs:
           from pathlib import Path
           script = Path("iam_daily_delivery.py").read_text()
           workflow = Path(".github/workflows/main.yml").read_text()
-          assert "subprocess.run([sys.executable, \"send_email.py\"]" in script
+          assert 'subprocess.run([sys.executable, "send_email.py"], check=True, env=env)' in script
           assert '"iam_review_digest.py", "--daily"' not in script
           assert 'github.event_name == \'schedule\' ||' in workflow
           assert 'python iam_review_digest.py\n' not in workflow
