@@ -1720,6 +1720,7 @@ CLOSED_JOB_PATTERNS = [
     r"\bjob posting has expired\b",
     r"\bsorry,? this job has expired\b",
     r"\bthis vacancy has (?:now )?expired\b",
+    r"\bvacancy not found or expired\b",
     r"\bjob you are trying to apply for has been filled\b",
 ]
 
@@ -6456,6 +6457,7 @@ def run_self_test() -> None:
     closed_banner_cases = [
         "This vacancy has now expired. Please see similar roles below.",
         "Sorry, this job has expired",
+        "Vacancy not found or expired.",
         "We are sorry, the job you are trying to apply for has been filled.",
     ]
     banner_ok = all(is_closed_job_page("", phrase) for phrase in closed_banner_cases)
